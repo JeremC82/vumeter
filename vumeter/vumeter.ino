@@ -58,7 +58,7 @@
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 #define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
-#define VU_VERSION "1.35"
+#define VU_VERSION "1.36"
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -549,8 +549,7 @@ void drawDial(int c) {
   cv.print(c ? "R" : "L");
   if (clipHold[c] > 0) cv.fillCircle(dialW - 5, dialH - 6, 2, rgb(255, 30, 20));  // voyant de crete
   float a = A0 + (A1 - A0) * needle[c];
-  cv.drawLine(px, py, px + sinf(a) * (r - 1), py - cosf(a) * (r - 1), ink);
-  cv.drawLine(px + 1, py, px + 1 + sinf(a) * (r - 1), py - cosf(a) * (r - 1), ink);
+  cv.drawLine(px, py, px + sinf(a) * (r - 1), py - cosf(a) * (r - 1), ink);  // aiguille fine : 1 pixel
   int ox = W >= 128 ? c * dialW : 0, oy = W >= 128 ? 0 : c * dialH;
   dma->drawRGBBitmap(ox, oy, cv.getBuffer(), dialW, dialH);
 }

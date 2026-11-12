@@ -159,8 +159,7 @@ def mode_aiguilles():
         text(cv, 2, dh - 9, 'R' if c else 'L', ink)
         if c == 0: d.ellipse((dw - 7, dh - 8, dw - 3, dh - 4), fill=(255, 30, 20))
         a = a0 + (a1 - a0) * needle
-        for o in (0, 1):
-            d.line((px + o, py, px + o + math.sin(a) * (r - 1), py - math.cos(a) * (r - 1)), fill=ink)
+        d.line((px, py, px + math.sin(a) * (r - 1), py - math.cos(a) * (r - 1)), fill=ink)  # aiguille fine
         im.paste(cv, (c * dw, 0))
     return im
 

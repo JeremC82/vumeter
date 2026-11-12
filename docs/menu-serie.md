@@ -23,7 +23,7 @@ Le port `COMx` est celui qui apparaît quand on branche l'ESP32 (Gestionnaire de
 Il s'affiche **au démarrage** de l'ESP32 et à chaque fois qu'on tape `?` (ou `h`) puis Entrée :
 
 ```
-===== VU-metre v1.35 =====
+===== VU-metre v1.36 =====
 Dalle : 128x64   Mode : Auto   Luminosite : 3/5
 Demo  : arretee
 -------------------------------
@@ -63,9 +63,9 @@ Changer de dalle (ici passage en 2 dalles 128x64) :
 ```
 4
 Dalle 2x128x64 enregistree, redemarrage...
-VU-metre v1.35
+VU-metre v1.36
 Dalle 2x128x64, couleurs 6 bits
-===== VU-metre v1.35 =====
+===== VU-metre v1.36 =====
 Dalle : 2x128x64   Mode : Auto   Luminosite : 3/5
 ...
 ```

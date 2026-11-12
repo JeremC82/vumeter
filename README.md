@@ -17,7 +17,7 @@ VU-mètre stéréo autonome (sans wifi) sur ESP32 et panneau(x) LED HUB75.
 Moniteur série à **115200 bauds** : le menu s'affiche au démarrage, puis avec `?`. Taper la touche puis Entrée.
 
 ```
-===== VU-metre v1.35 =====
+===== VU-metre v1.36 =====
 Dalle : 128x64   Mode : Auto   Luminosite : 3/5
 Demo  : arretee
 -------------------------------
@@ -45,4 +45,4 @@ Compilation : `./build.ps1` (arduino-cli, ESP32 classique) → `vumeter.bin`.
 ## Firmware
 
 Binaire prêt à flasher (un seul binaire pour toutes les dalles, à l'adresse 0x10000) :
-[firmware/vumeter_v1.35.bin](firmware/vumeter_v1.35.bin) — MD5 `a341b4e402c5e385cf15d3c8d65f6d9c`
+[firmware/vumeter_v1.36.bin](firmware/vumeter_v1.36.bin) — MD5 `de888d3971674b2a73b095a7774d52cd`
