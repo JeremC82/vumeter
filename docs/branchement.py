@@ -49,13 +49,13 @@ text(W // 2, 72, 'ESP32 DevKit (38 broches) - meme brochage dalle que l\'horloge
 ex0, ey0, ex1, ey1 = 760, 140, 1080, 900
 box(ex0, ey0, ex1, ey1, 'ESP32 DevKit', (236, 242, 250))
 LEFT = [('3V3', '3,3 V'), ('GND', 'masse'), ('GPIO36', 'audio G (VP)'), ('GPIO39', 'audio D (VN)'), ('GPIO33', 'bouton'),
-        ('5V / VIN', '5 V'), ('GND', 'masse')]
+        ('GPIO18', 'demo'), ('5V / VIN', '5 V'), ('GND', 'masse')]
 RIGHT = [('GPIO25', 'R1'), ('GPIO26', 'G1'), ('GPIO27', 'B1'), ('GPIO14', 'R2'), ('GPIO12', 'G2'), ('GPIO13', 'B2'),
          ('GPIO23', 'A'), ('GPIO19', 'B'), ('GPIO5', 'C'), ('GPIO17', 'D'), ('GPIO32', 'E'), ('GPIO16', 'CLK'),
          ('GPIO4', 'LAT'), ('GPIO15', 'OE'), ('GND', 'GND')]
 lpin = {}
 for i, (p, _) in enumerate(LEFT):
-    y = ey0 + 80 + i * 105
+    y = ey0 + 80 + i * 92
     d.rectangle((ex0 - 12, y - 6, ex0, y + 6), fill=INK)
     text(ex0 + 12, y, p, F, INK, 'lm')
     lpin[i] = (ex0 - 12, y)
@@ -155,12 +155,22 @@ text(ax0 + 20, ay0 + 665, 'Masse du jack reliee a la masse de l\'ESP32.', FS, GR
 
 # ---------------------------------------------------------------- button
 bx, by = lpin[4]
-wire([(bx, by), (735, by), (735, by + 30)], INK)
-d.line((720, by + 30, 750, by + 30), fill=INK, width=3)
-d.line((720, by + 30, 742, by + 52), fill=INK, width=3)
-wire([(735, by + 58), (735, by + 80)], INK)
-d.line((718, by + 80, 752, by + 80), fill=INK, width=4)
-text(714, by + 44, 'bouton', FS, INK, 'rm')
+wire([(bx, by), (735, by), (735, by + 20)], INK)
+d.line((720, by + 20, 750, by + 20), fill=INK, width=3)
+d.line((720, by + 20, 742, by + 40), fill=INK, width=3)
+wire([(735, by + 44), (735, by + 58)], INK)
+d.line((718, by + 58, 752, by + 58), fill=INK, width=4)
+text(714, by + 36, 'bouton', FS, INK, 'rm')
+
+# ---------------------------------------------------------------- demo jumper (GPIO18 -> GND)
+jx, jy = lpin[5]
+wire([(jx, jy), (735, jy), (735, jy + 14)], ORANGE)
+for yy in (jy + 20, jy + 40):  # two header pins
+    d.rectangle((729, yy - 6, 741, yy + 6), fill=INK)
+d.rounded_rectangle((724, jy + 12, 746, jy + 48), 4, outline=ORANGE, width=3)  # the shunt
+wire([(735, jy + 48), (735, jy + 60)], INK)
+d.line((718, jy + 60, 752, jy + 60), fill=INK, width=4)
+text(ex0 + 12, jy + 26, 'cavalier = demo', FS, ORANGE, 'lm')
 
 # ---------------------------------------------------------------- power
 px0, py0p = 40, 900
@@ -170,18 +180,19 @@ text(px0 + 30, py0p + 110, '+5 V  ->  broche 5 V / VIN de l\'ESP32', F, RED)
 text(px0 + 30, py0p + 150, 'GND   ->  dalles + ESP32 (masse commune)', F, INK)
 text(px0 + 30, py0p + 200, 'Fils de 1,5 mm2 pour le 5 V des dalles.', FS, GREY)
 text(px0 + 30, py0p + 230, 'Ne pas alimenter les dalles par l\'USB de l\'ESP32.', FS, RED)
-vx, vy = lpin[5]
+vx, vy = lpin[6]
 wire([(px0 + 640, py0p + 110), (720, py0p + 110), (720, vy), (vx, vy)], RED, 4)
-gx, gy = lpin[6]
+gx, gy = lpin[7]
 wire([(px0 + 640, py0p + 150), (700, py0p + 150), (700, gy), (gx, gy)], INK, 4)
 
 # ---------------------------------------------------------------- button use
 ux0, uy0 = 760, 960
-box(ux0, uy0, ux0 + 620, uy0 + 240, 'Bouton (GPIO33 ou BOOT)', (245, 245, 255))
-for i, s in enumerate(['Appui court : mode suivant', 'Appui 1 a 3 s : luminosite (5 niveaux)',
+box(ux0, uy0, ux0 + 620, uy0 + 310, 'Bouton (GPIO33 ou BOOT) et cavalier demo', (245, 245, 255))
+for i, s in enumerate(['Appui court : mode suivant', 'Appui 1 a 5 s : luminosite (5 niveaux)',
                        'Appui 5 s : type de dalle suivant (redemarre)',
-                       'Modes : Auto, Barres, Spectre, Miroir,', 'Aiguilles, Stereo, Onde']):
-    text(ux0 + 30, uy0 + 60 + i * 34, s, F)
+                       'Modes : Auto, Barres, Spectre, Miroir,', 'Aiguilles, Stereo, Onde',
+                       'Cavalier GPIO18 - GND : demo (musique interne,', 'pas besoin de source audio)']):
+    text(ux0 + 30, uy0 + 60 + i * 34, s, F, ORANGE if i >= 5 else INK)
 
 img.save(OUT)
 print(OUT)

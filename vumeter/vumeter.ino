@@ -13,8 +13,12 @@
 /*                                                                                                */
 /*  Bouton sur GPIO 33 (vers la masse) ou bouton BOOT de la carte :                              */
 /*    appui court        : mode suivant (Auto, Barres, Spectre, Miroir, Aiguilles, Stereo, Onde)  */
-/*    appui 1 a 3 s      : luminosite suivante (5 niveaux)                                       */
+/*    appui 1 a 5 s      : luminosite suivante (5 niveaux)                                       */
 /*    appui 5 s          : configuration de dalle suivante (redemarre)                            */
+/*                                                                                                */
+/*  Mode demo : cavalier permanent entre GPIO 18 et la masse. Le son est alors une petite        */
+/*  musique synthetisee (batterie, basse, arpege stereo) a la place de l'entree audio.           */
+/*  Le cavalier peut etre mis ou retire a tout moment.                                           */
 /**************************************************************************************************/
 #include <Arduino.h>
 #include <Preferences.h>
@@ -43,6 +47,7 @@
 #define CLK_PIN 16
 #define BTN_PIN 33   // bouton vers la masse (pull-up interne)
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
+#define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -138,6 +143,82 @@ void bandsInit(float fs) {
   }
 }
 
+// ---------------------------------------------------------------- mode demo : musique synthetisee
+// Remplace les echantillons lus par l'ADC (meme format : canal << 12 | valeur 12 bits), ce qui
+// garde le rythme et la mesure de frequence de l'I2S : tout le reste de la chaine est inchange.
+volatile bool demoOn = false;
+const float DEMO_BPM = 124;
+struct DemoSynth {
+  float stepPos = 0;  // avancement dans la double-croche en cours (0..1)
+  uint32_t step = 0;  // numero de double-croche
+  bool started = false;
+  float phK = 0, fK = 45, envK = 0;     // grosse caisse
+  float phS = 0, envS = 0;              // caisse claire
+  float envH = 0, nPrev = 0;            // charleston
+  float phB = 0, fB = 55, envB = 0;     // basse
+  float phA = 0, fA = 440, envA = 0, panA = 0.5f;  // arpege
+  float level = 1;
+  uint32_t rnd = 12345;
+} demo;
+float midiHz(int n) { return 440.0f * powf(2, (n - 69) / 12.0f); }
+float demoNoise() {
+  demo.rnd = demo.rnd * 1664525u + 1013904223u;
+  return (int32_t)demo.rnd / 2147483648.0f;
+}
+void demoStep() {  // evenements de la double-croche
+  static const uint8_t BASS[4] = { 33, 29, 31, 28 };  // La, Fa, Sol, Mi
+  static const uint8_t CHORD[4][4] = { { 69, 72, 76, 81 }, { 65, 69, 72, 77 }, { 67, 71, 74, 79 }, { 64, 67, 71, 76 } };
+  uint32_t bar = demo.step / 16, s = demo.step % 16, sect = (bar / 8) % 4, chord = bar % 4;
+  bool full = sect != 1;  // section 1 : pont sans batterie ni basse
+  if (full && s % 4 == 0) { demo.envK = 1; demo.fK = 170; }
+  if (full && (s == 4 || s == 12)) demo.envS = 1;
+  if (s % 4 == 2) demo.envH = 1;
+  else if (sect >= 2 && (s & 1)) demo.envH = 0.45f;
+  if (full && s % 2 == 0) { demo.envB = 1; demo.fB = midiHz(BASS[chord] + (s % 8 == 6 ? 12 : 0)); }
+  demo.envA = 1;
+  demo.fA = midiHz(CHORD[chord][(s * 3) % 4] + (bar % 2 ? 12 : 0));
+  demo.panA = (s & 1) ? 0.2f : 0.8f;
+  demo.level = sect == 1 ? 0.35f + 0.6f * (bar % 8) / 8.0f : sect == 3 ? 1.0f : 0.75f;
+}
+void demoFill(uint16_t *raw, int n, float fs) {
+  const float dt = 1.0f / fs, TWO_PI_F = 6.2831853f;
+  const float dK = expf(-dt * 7), dKf = expf(-dt * 35), dS = expf(-dt * 16), dH = expf(-dt * 55), dB = expf(-dt * 6), dA = expf(-dt * 11);
+  const float stepInc = dt * DEMO_BPM / 15;  // 4 double-croches par temps
+  for (int i = 0; i + 1 < n; i += 2) {
+    if (!demo.started) { demo.started = true; demoStep(); }
+    demo.stepPos += stepInc;
+    if (demo.stepPos >= 1) { demo.stepPos -= 1; demo.step++; demoStep(); }
+    // grosse caisse : sinus qui descend de 170 a 45 Hz
+    demo.fK = 45 + (demo.fK - 45) * dKf;
+    demo.phK += TWO_PI_F * demo.fK * dt;
+    if (demo.phK > TWO_PI_F) demo.phK -= TWO_PI_F;
+    float kick = sinf(demo.phK) * demo.envK;
+    // caisse claire : bruit + 190 Hz
+    demo.phS += TWO_PI_F * 190 * dt;
+    if (demo.phS > TWO_PI_F) demo.phS -= TWO_PI_F;
+    float nz = demoNoise();
+    float snare = (nz * 0.55f + sinf(demo.phS) * 0.3f) * demo.envS;
+    // charleston : bruit aigu (difference de deux tirages)
+    float hat = (nz - demo.nPrev) * 0.22f * demo.envH;
+    demo.nPrev = nz;
+    // basse : 3 harmoniques
+    demo.phB += TWO_PI_F * demo.fB * dt;
+    if (demo.phB > TWO_PI_F) demo.phB -= TWO_PI_F;
+    float bass = (sinf(demo.phB) + 0.5f * sinf(2 * demo.phB) + 0.3f * sinf(3 * demo.phB)) * 0.3f * demo.envB;
+    // arpege : sinus + octave, alterne gauche / droite
+    demo.phA += TWO_PI_F * demo.fA * dt;
+    if (demo.phA > TWO_PI_F) demo.phA -= TWO_PI_F;
+    float arp = (sinf(demo.phA) + 0.3f * sinf(2 * demo.phA)) * 0.3f * demo.envA;
+    float center = kick * 0.8f + snare + bass;
+    float l = (center + hat * 0.7f + arp * (1 - demo.panA)) * demo.level;
+    float r = (center + hat + arp * demo.panA) * demo.level;
+    demo.envK *= dK; demo.envS *= dS; demo.envH *= dH; demo.envB *= dB; demo.envA *= dA;
+    int vl = constrain((int)(2048 + l * 1100), 0, 4095), vr = constrain((int)(2048 + r * 1100), 0, 4095);
+    raw[i] = (ADC_CH_L << 12) | vl;
+    raw[i + 1] = (ADC_CH_R << 12) | vr;
+  }
+}
+
 void audioTask(void *) {
   static uint16_t raw[1024];
   static float ringL[FFT_N], ringR[FFT_N];
@@ -152,6 +233,7 @@ void audioTask(void *) {
     size_t got = 0;
     i2s_read(I2S_NUM_0, raw, sizeof(raw), &got, portMAX_DELAY);
     int n = got / 2, seenR = 0;
+    if (demoOn) demoFill(raw, n, fs);
     float lastL = 0;
     for (int i = 0; i < n; i++) {
       uint16_t w = raw[i];
@@ -567,6 +649,20 @@ void handleButton() {
   }
 }
 
+// ---------------------------------------------------------------- cavalier du mode demo (anti-rebond 100 ms)
+void handleDemoPin() {
+  static uint32_t last = 0;
+  static uint8_t same = 0;
+  if (millis() - last < 20) return;
+  last = millis();
+  bool want = digitalRead(DEMO_PIN) == LOW;
+  if (want == demoOn) { same = 0; return; }
+  if (++same < 5) return;
+  same = 0;
+  demoOn = want;
+  showMessage(want ? "Demo" : "Entree audio");
+}
+
 // ---------------------------------------------------------------- demarrage
 void setup() {
   Serial.begin(115200);
@@ -574,6 +670,9 @@ void setup() {
   btStop();
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(BOOT_PIN, INPUT_PULLUP);
+  pinMode(DEMO_PIN, INPUT_PULLUP);
+  delay(5);
+  demoOn = digitalRead(DEMO_PIN) == LOW;
   prefs.begin("vu", false);
   layout = prefs.getUChar("layout", 0) % 4;
   mode = prefs.getUChar("mode", M_AUTO) % M_COUNT;
@@ -601,7 +700,7 @@ void setup() {
   dma->setBrightness8(BRIGHT[brightIdx]);
   dma->fillScreen(0);
   char m[24];
-  snprintf(m, sizeof(m), "%s", LAYOUT_NAME[layout]);
+  snprintf(m, sizeof(m), "%s%s", LAYOUT_NAME[layout], demoOn ? " Demo" : "");
   showMessage(m);
 
   fftInit();
@@ -613,6 +712,7 @@ void setup() {
 void loop() {
   static uint32_t lastSeq = 0;
   handleButton();
+  handleDemoPin();
   uint8_t want = mode;
   if (mode == M_AUTO) {  // Auto : change de mode toutes les 20 s
     if (millis() - autoSince > AUTO_SECONDS * 1000UL) {
