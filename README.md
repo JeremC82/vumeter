@@ -2,6 +2,10 @@
 
 VU-mètre stéréo autonome (sans wifi) sur ESP32 et panneau(x) LED HUB75.
 
+![Les 6 modes d'affichage](docs/rendu.png)
+
+*Aperçu simulé sur une dalle 128x64 (généré par `docs/rendu.py`).*
+
 - Entrée ligne analogique : GPIO36 (L) / GPIO39 (R), polarisée ~1,3 V, lue par l'ADC interne via I2S0.
 - Panneau sur I2S1 (mêmes broches que l'horloge ClockV1).
 - Dispositions : 64x64, 2x64x64, 128x64, 2x128x64.
