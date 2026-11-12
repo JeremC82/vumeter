@@ -14,4 +14,11 @@ struct Ballistic {
   }
 };
 
-struct Bar { int16_t x, w; uint8_t ch, band0, band1; bool center; float hue; Ballistic b; int8_t shown, cap; };
+struct Bar {
+  int16_t x, w;
+  uint8_t ch, band0, band1;  // ch : 0 gauche, 1 droite, 2 les deux
+  bool center, dual;         // dual : cretes separees gauche / droite
+  float hue;
+  Ballistic b, bc[2];        // barre, et cretes par voie (mode double)
+  int8_t shown, cap, cap2;
+};

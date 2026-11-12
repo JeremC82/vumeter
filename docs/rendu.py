@@ -20,12 +20,13 @@ def spectrum(shift):
         f = b / 63
         v = 0.92 - 0.45 * f + 0.12 * math.sin(b * 0.55 + shift) + random.uniform(-0.12, 0.08)
         if b < 4: v += 0.06
-        out.append(max(0.05, min(0.98, v)))
+        out.append(max(0.05, min(1.0, v + 0.06)))
     return out
 
 
 SPEC = [spectrum(0), spectrum(1.7)]
 PEAK = [[min(0.99, v + random.uniform(0.03, 0.12)) for v in s] for s in SPEC]
+for b in range(0, 64, 5): PEAK[1][b] = PEAK[0][b]  # quelques cretes egales (jaune)
 RMS = [0.80, 0.70]
 
 # ---------------------------------------------------------------- outils pixels
@@ -74,15 +75,18 @@ def mode_barres():
         lit, cap = int(RMS[c] * n + 0.5), min(n - 1, int((RMS[c] + 0.08) * n))
         for s in range(n):
             f = (s + 1) / n
-            col = WHITE if s == cap else zone(f) if s < lit else dim(zone(f))
+            on = (255, 30, 20) if f > 0.88 else (30, 110, 255)  # barres bleues, rouge en saturation
+            col = WHITE if s == cap else on if s < lit else dim(on)
             x, y = 8 + s * sw, 36 if c else 6
             d.rectangle((x, y, x + sw - 2, y + 21), fill=col)
     return im
 
 
-def bars(stereo=False, center=False):
+def bars(stereo=False, center=False, gap=1, dual=False):
+    """Moteur de barres de vumeter.ino : fond noir, cretes blanches (ou rouge / blanc / jaune en double)."""
     im = Image.new('RGB', (W, H)); d = ImageDraw.Draw(im)
-    pitch, bw = 4, 3
+    bw = 3 if gap else max(1, W // 64)
+    pitch = bw + gap
     lst = []
     if not stereo:
         n = W // pitch
@@ -92,23 +96,36 @@ def bars(stereo=False, center=False):
         half, n = W // 2, (W // 2) // pitch
         for i in range(n):
             b0, b1, hue = i * 64 // n, (i + 1) * 64 // n, 200 - 200 * i / n
-            lst.append((half - (i + 1) * pitch + 1, 0, b0, b1, hue))
+            lst.append((half - (i + 1) * pitch + gap, 0, b0, b1, hue))
             lst.append((half + i * pitch, 1, b0, b1, hue))
+    n = H // 4 if center else H // 2
+
+    def row(x, s, col):
+        if center:
+            d.line((x, H // 2 - 2 - s * 2, x + bw - 1, H // 2 - 2 - s * 2), fill=col)
+            d.line((x, H // 2 + 1 + s * 2, x + bw - 1, H // 2 + 1 + s * 2), fill=col)
+        else:
+            d.line((x, H - 1 - s * 2, x + bw - 1, H - 1 - s * 2), fill=col)
+
     for x, ch, b0, b1, hue in lst:
         chans = (0, 1) if ch == 2 else (ch,)
-        v = max(SPEC[c][b] for c in chans for b in range(b0, max(b0 + 1, b1)))
-        pk = max(PEAK[c][b] for c in chans for b in range(b0, max(b0 + 1, b1)))
-        n = H // 4 if center else H // 2
-        lit, cap = int(v * n + 0.5), min(n - 1, int(pk * n))
-        for s in range(n):
+        rng = range(b0, max(b0 + 1, b1))
+        v = max(SPEC[c][b] for c in chans for b in rng)
+        lit = int(v * n + 0.5)
+        for s in range(lit):
             f = (s + 0.5) / n
-            base = hsv(hue, 1, 0.35 + 0.65 * f) if center else hsv(120 - 120 * f, 1, 1)
-            col = WHITE if (s == cap and cap >= lit) else base if s < lit else dim(base)
-            if center:
-                d.line((x, H // 2 - 2 - s * 2, x + bw - 1, H // 2 - 2 - s * 2), fill=col)
-                d.line((x, H // 2 + 1 + s * 2, x + bw - 1, H // 2 + 1 + s * 2), fill=col)
+            row(x, s, hsv(hue, 1, 0.35 + 0.65 * f) if center else hsv(120 - 120 * f, 1, 1))
+        if dual:
+            cl = min(n - 1, int(max(PEAK[0][b] for b in rng) * n))
+            cr = min(n - 1, int(max(PEAK[1][b] for b in rng) * n))
+            if cl == cr:
+                row(x, cl, (255, 220, 0))
             else:
-                d.line((x, H - 1 - s * 2, x + bw - 1, H - 1 - s * 2), fill=col)
+                row(x, cl, (255, 30, 20)); row(x, cr, WHITE)
+        else:
+            cap = min(n - 1, int(max(PEAK[c][b] for c in chans for b in rng) * n))
+            if cap >= lit:
+                row(x, cap, WHITE)
     return im
 
 
@@ -121,9 +138,9 @@ def mode_aiguilles():
     im = Image.new('RGB', (W, H))
     dw, dh = W // 2, H
     for c, needle in enumerate((0.72, 0.55)):
-        cv = Image.new('RGB', (dw, dh), (120, 82, 20)); d = ImageDraw.Draw(cv)
+        cv = Image.new("RGB", (dw, dh), (20, 70, 200)); d = ImageDraw.Draw(cv)
         ink, red = (10, 6, 0), (200, 20, 10)
-        d.rectangle((0, 0, dw - 1, dh - 1), outline=(40, 26, 6))
+        d.rectangle((0, 0, dw - 1, dh - 1), outline=(6, 20, 70))
         px, py, r = dw / 2, dh * 1.35, dh * 1.15
         a0, a1 = -0.85, 0.85
         for t in (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3):
@@ -190,18 +207,20 @@ def font(size, bold=False):
     return ImageFont.load_default()
 
 
-MODES = [('Barres', mode_barres()), ('Spectre', bars()), ('Miroir', bars(center=True)),
-         ('Aiguilles', mode_aiguilles()), ('Stereo', bars(stereo=True)), ('Onde', mode_onde())]
+MODES = [('Barres', mode_barres()), ('Spectre', bars()), ('SpectreL (barres collees)', bars(gap=0)),
+         ('Spectre St (cretes : rouge = gauche, blanc = droite, jaune = les deux)', bars(dual=True)),
+         ('Miroir', bars(center=True)), ('Stereo', bars(stereo=True)),
+         ('Aiguilles', mode_aiguilles()), ('Onde', mode_onde())]
 pw, ph = W * P + 16, H * P + 16
 M, CAP, TOP = 40, 50, 110
-img = Image.new('RGB', (2 * pw + 3 * M, TOP + 3 * (ph + CAP + M)), (18, 18, 22))
+img = Image.new('RGB', (2 * pw + 3 * M, TOP + 4 * (ph + CAP + M)), (18, 18, 22))
 d = ImageDraw.Draw(img)
-d.text((img.width // 2, 40), 'VU-metre HUB75 - les 6 modes (dalle 128x64)', font=font(34, True), fill=(235, 235, 235), anchor='mm')
-d.text((img.width // 2, 80), 'Appui court sur le bouton : mode suivant - Auto fait defiler les modes toutes les 20 s',
+d.text((img.width // 2, 40), 'VU-metre HUB75 - les 8 modes (dalle 128x64)', font=font(34, True), fill=(235, 235, 235), anchor='mm')
+d.text((img.width // 2, 80), 'Touche m du menu serie : mode suivant - Auto fait defiler les modes toutes les 20 s - LED eteintes en gris fonce',
        font=font(18), fill=(150, 150, 150), anchor='mm')
 for i, (name, px) in enumerate(MODES):
     x, y = M + (i % 2) * (pw + M), TOP + (i // 2) * (ph + CAP + M)
-    d.text((x, y + 18), name, font=font(24, True), fill=(220, 220, 220), anchor='lm')
+    d.text((x, y + 18), name, font=font(22, True), fill=(220, 220, 220), anchor='lm')
     img.paste(led_panel(px), (x, y + CAP - 8))
 img.save(OUT)
 print(OUT)

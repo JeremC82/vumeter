@@ -181,7 +181,7 @@ box(ux0, uy0, ux0 + 620, uy0 + 380, 'Reglages : moniteur serie 115200 bauds', (2
 for i, s in enumerate(['Menu au demarrage, ou touche ? puis Entree :', '1 a 4 : type de dalle (memorise, redemarre)',
                        'd : demo marche / arret (memorise)', "m : mode d'affichage suivant",
                        'l : luminosite suivante',
-                       'Modes : Auto, Barres, Spectre, Miroir,', 'Aiguilles, Stereo, Onde',
+                       'Modes : Auto, Barres, Spectre, Miroir, Aiguilles,', 'Stereo, Onde, SpectreL, Spectre St',
                        'Cavalier GPIO18 - GND : demo forcee', '(musique interne, sans source audio)']):
     text(ux0 + 30, uy0 + 60 + i * 34, s, FB if i == 0 else F, ORANGE if i >= 7 else INK)
 

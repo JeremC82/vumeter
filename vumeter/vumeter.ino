@@ -12,7 +12,7 @@
 /*  par l'ADC1 via l'I2S0 (DMA), sans charger le processeur. La dalle utilise l'I2S1.            */
 /*                                                                                                */
 /*  Bouton sur GPIO 33 (vers la masse) ou bouton BOOT de la carte :                              */
-/*    appui court        : mode suivant (Auto, Barres, Spectre, Miroir, Aiguilles, Stereo, Onde)  */
+/*    appui court        : mode suivant (Auto, Barres, Spectre, Miroir, ...)                      */
 /*    appui 1 a 5 s      : luminosite suivante (5 niveaux)                                       */
 /*    appui 5 s          : configuration de dalle suivante (redemarre) - secours du bouton 2      */
 /*                                                                                                */
@@ -58,7 +58,7 @@
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 #define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
-#define VU_VERSION "1.34"
+#define VU_VERSION "1.35"
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -67,8 +67,9 @@
 const char *LAYOUT_NAME[4] = { "64x64", "2x64x64", "128x64", "2x128x64" };
 const uint8_t LAYOUT_PANEL_W[4] = { 64, 64, 128, 128 };
 const uint8_t LAYOUT_CHAIN[4] = { 1, 2, 1, 2 };
-enum Mode : uint8_t { M_AUTO, M_BARS, M_SPECTRUM, M_MIRROR, M_NEEDLES, M_STEREO, M_WAVE, M_COUNT };
-const char *MODE_NAME[M_COUNT] = { "Auto", "Barres", "Spectre", "Miroir", "Aiguilles", "Stereo", "Onde" };
+// (nouveaux modes ajoutes a la fin : les numeros deja enregistres restent valables)
+enum Mode : uint8_t { M_AUTO, M_BARS, M_SPECTRUM, M_MIRROR, M_NEEDLES, M_STEREO, M_WAVE, M_SPECTRUM_L, M_SPECTRUM_ST, M_COUNT };
+const char *MODE_NAME[M_COUNT] = { "Auto", "Barres", "Spectre", "Miroir", "Aiguilles", "Stereo", "Onde", "SpectreL", "Spectre St" };
 const uint8_t BRIGHT[5] = { 20, 45, 80, 140, 220 };
 #define AUTO_SECONDS 20
 
@@ -357,73 +358,100 @@ float norm01(float db) { return constrain((db - (agcRef - RANGE_DB)) / RANGE_DB,
 
 // ---------------------------------------------------------------- moteur de barres verticales (sans scintillement)
 // Chaque barre ne redessine que les cases qui changent depuis l'image precedente.
+// Fond noir : les cases eteintes ne sont pas dessinees.
 #define MAX_BARS 128
 Bar barList[MAX_BARS];
 int nBars = 0;
-const int SEG = 2;  // hauteur d'une case : 1 ligne allumee + 1 ligne d'espace
+const int SEG = 2;          // hauteur d'une case : 1 ligne allumee + 1 ligne d'espace
+const float SPEC_BOOST = 4; // dB : le haut de l'echelle est atteint par les sons forts, pas seulement par les cretes
 int segCount(const Bar &br) { return br.center ? H / 4 : H / SEG; }
-uint16_t barCellColor(const Bar &br, int seg, bool lit, bool cap) {
-  int n = segCount(br);
-  float f = (seg + 0.5f) / n;
-  uint16_t c = br.center ? hsv(br.hue, 1, 0.35f + 0.65f * f) : hsv(120 - 120 * f, 1, 1);
-  if (cap) return br.center ? rgb(255, 255, 255) : rgb(255, 255, 255);
-  return lit ? c : dimmed(c, 4);
+uint16_t barCellColor(const Bar &br, int seg, bool lit) {
+  if (!lit) return 0;
+  float f = (seg + 0.5f) / segCount(br);
+  return br.center ? hsv(br.hue, 1, 0.35f + 0.65f * f) : hsv(120 - 120 * f, 1, 1);
 }
-void barDrawSeg(const Bar &br, int seg, bool lit, bool cap) {
-  uint16_t col = barCellColor(br, seg, lit, cap);
+void barFillSeg(const Bar &br, int seg, uint16_t col) {
   if (br.center) {  // depuis le milieu vers le haut et vers le bas
-    int yu = H / 2 - 2 - seg * SEG, yd = H / 2 + 1 + seg * SEG;
-    dma->fillRect(br.x, yu, br.w, 1, col);
-    dma->fillRect(br.x, yd, br.w, 1, col);
+    dma->fillRect(br.x, H / 2 - 2 - seg * SEG, br.w, 1, col);
+    dma->fillRect(br.x, H / 2 + 1 + seg * SEG, br.w, 1, col);
   } else {
     dma->fillRect(br.x, H - 1 - seg * SEG, br.w, 1, col);
   }
 }
+void barDrawSeg(const Bar &br, int seg, bool lit) { barFillSeg(br, seg, barCellColor(br, seg, lit)); }
 void barsFullDraw() {
   dma->fillScreen(0);
   for (int i = 0; i < nBars; i++) {
-    Bar &br = barList[i];
-    br.shown = 0;
-    br.cap = -1;
-    for (int s = 0; s < segCount(br); s++) barDrawSeg(br, s, false, false);
+    barList[i].shown = 0;
+    barList[i].cap = barList[i].cap2 = -1;
   }
 }
-void barsSetup(bool stereoSplit, bool center) {
-  int barW = W >= 256 ? 3 : W >= 128 ? 3 : 3, gap = 1, pitch = barW + gap;
+// stereoSplit : gauche / droite de part et d'autre du centre ; center : barres depuis le milieu ;
+// gap : espace entre barres (0 = barres collees) ; dual : cretes gauche (rouge) et droite (blanc)
+void barsSetup(bool stereoSplit, bool center, int gap, bool dual) {
+  int barW = gap ? 3 : max(1, W / NBANDS), pitch = barW + gap;
   nBars = 0;
   if (!stereoSplit) {
     int n = min(MAX_BARS, W / pitch), x0 = (W - n * pitch + gap) / 2;
-    for (int i = 0; i < n; i++)
-      barList[nBars++] = { (int16_t)(x0 + i * pitch), (int16_t)barW, 2, (uint8_t)(i * NBANDS / n), (uint8_t)((i + 1) * NBANDS / n), center,
-                        (float)(i * 300 / n), Ballistic(), 0, -1 };
+    for (int i = 0; i < n; i++) {
+      Bar br = {};
+      br.x = x0 + i * pitch; br.w = barW; br.ch = 2;
+      br.band0 = i * NBANDS / n; br.band1 = (i + 1) * NBANDS / n;
+      br.center = center; br.hue = i * 300.0f / n; br.dual = dual;
+      barList[nBars++] = br;
+    }
   } else {  // gauche : graves au centre vers la gauche ; droite : graves au centre vers la droite
     int half = W / 2, n = min(MAX_BARS / 2, half / pitch);
     for (int i = 0; i < n; i++) {
-      uint8_t b0 = i * NBANDS / n, b1 = (i + 1) * NBANDS / n;
-      barList[nBars++] = { (int16_t)(half - (i + 1) * pitch + gap), (int16_t)barW, 0, b0, b1, center, 200.0f - 200.0f * i / n, Ballistic(), 0, -1 };
-      barList[nBars++] = { (int16_t)(half + i * pitch), (int16_t)barW, 1, b0, b1, center, 200.0f - 200.0f * i / n, Ballistic(), 0, -1 };
+      Bar br = {};
+      br.w = barW; br.band0 = i * NBANDS / n; br.band1 = (i + 1) * NBANDS / n;
+      br.center = center; br.hue = 200.0f - 200.0f * i / n;
+      br.x = half - (i + 1) * pitch + gap; br.ch = 0;
+      barList[nBars++] = br;
+      br.x = half + i * pitch; br.ch = 1;
+      barList[nBars++] = br;
     }
   }
   barsFullDraw();
 }
+int peakSeg(const Ballistic &b, int n) { return b.peak < 0.02f ? -1 : min(n - 1, (int)(b.peak * n)); }
 void barsUpdate() {
+  const uint16_t RED = rgb(255, 30, 20), WHITE = rgb(255, 255, 255), YELLOW = rgb(255, 220, 0);
   for (int i = 0; i < nBars; i++) {
     Bar &br = barList[i];
-    float db = -120;
+    float db = -120, dbc[2] = { -120, -120 };
     for (int b = br.band0; b < max(br.band0 + 1, (int)br.band1); b++)
-      for (int c = 0; c < 2; c++)
+      for (int c = 0; c < 2; c++) {
+        dbc[c] = max(dbc[c], view.bandDb[c][b]);
         if (br.ch == 2 || br.ch == c) db = max(db, view.bandDb[c][b]);
-    br.b.update(norm01(db));
-    int n = segCount(br);
-    int lit = (int)(br.b.v * n + 0.5f), cap = min(n - 1, (int)(br.b.peak * n));
-    if (cap < lit || br.b.peak < 0.02f) cap = -1;
-    for (int s = min(lit, (int)br.shown); s < max(lit, (int)br.shown); s++) barDrawSeg(br, s, s < lit, false);
-    if (br.cap != cap) {
-      if (br.cap >= 0) barDrawSeg(br, br.cap, br.cap < lit, false);
-      if (cap >= 0) barDrawSeg(br, cap, false, true);
+      }
+    br.b.update(norm01(db + SPEC_BOOST));
+    int n = segCount(br), lit = (int)(br.b.v * n + 0.5f);
+    int cap, cap2 = -1;  // cap2 : crete droite en mode double
+    if (br.dual) {
+      for (int c = 0; c < 2; c++) br.bc[c].update(norm01(dbc[c] + SPEC_BOOST));
+      cap = peakSeg(br.bc[0], n);
+      cap2 = peakSeg(br.bc[1], n);
+    } else {
+      cap = peakSeg(br.b, n);
+      if (cap < lit) cap = -1;  // crete dans la barre : invisible
+    }
+    // efface les anciennes cretes qui bougent, puis met a jour la barre, puis dessine les cretes
+    if (br.cap >= 0 && br.cap != cap && br.cap != cap2) barDrawSeg(br, br.cap, br.cap < br.shown);
+    if (br.cap2 >= 0 && br.cap2 != cap && br.cap2 != cap2) barDrawSeg(br, br.cap2, br.cap2 < br.shown);
+    for (int s = min(lit, (int)br.shown); s < max(lit, (int)br.shown); s++) barDrawSeg(br, s, s < lit);
+    if (br.dual) {
+      if (cap >= 0 && cap == cap2) barFillSeg(br, cap, YELLOW);  // meme niveau sur les deux voies
+      else {
+        if (cap >= 0) barFillSeg(br, cap, RED);     // gauche
+        if (cap2 >= 0) barFillSeg(br, cap2, WHITE); // droite
+      }
+    } else if (cap >= 0) {
+      barFillSeg(br, cap, WHITE);
     }
     br.shown = lit;
     br.cap = cap;
+    br.cap2 = cap2;
   }
 }
 
@@ -436,7 +464,8 @@ int vuSegs() { return (W - VU_LBL) / vuSegW(); }
 void vuDrawSeg(int c, int s, bool lit, bool cap) {
   int n = vuSegs(), sw = vuSegW(), x = VU_LBL + s * sw, y = c ? 36 : 6;
   float f = (s + 1.0f) / n;
-  uint16_t col = cap ? rgb(255, 255, 255) : lit ? zoneColor(f) : dimmed(zoneColor(f), 4);
+  uint16_t on = f > 0.88f ? rgb(255, 30, 20) : rgb(30, 110, 255);  // barres bleues, rouge en saturation
+  uint16_t col = cap ? rgb(255, 255, 255) : lit ? on : dimmed(on, 4);
   dma->fillRect(x, y, sw - 1, 22, col);
 }
 void vuBarsSetup() {
@@ -496,9 +525,9 @@ void needlesSetup() {
 }
 void drawDial(int c) {
   GFXcanvas16 &cv = *dialCv;
-  uint16_t face = rgb(120, 82, 20), ink = rgb(10, 6, 0), red = rgb(200, 20, 10);
+  uint16_t face = rgb(20, 70, 200), ink = rgb(10, 6, 0), red = rgb(200, 20, 10);
   cv.fillScreen(face);
-  cv.drawRect(0, 0, dialW, dialH, rgb(40, 26, 6));
+  cv.drawRect(0, 0, dialW, dialH, rgb(6, 20, 70));
   float px = dialW / 2.0f, py = dialH * 1.35f, r = dialH * 1.15f;  // pivot sous le cadran
   const float A0 = -0.85f, A1 = 0.85f;                              // angles extremes (radians)
   static const int8_t TICKS[11] = { -20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3 };
@@ -580,18 +609,20 @@ void enterMode(uint8_t m) {
   if (dialCv && m != M_NEEDLES) { delete dialCv; dialCv = nullptr; }
   switch (m) {
     case M_BARS: vuBarsSetup(); break;
-    case M_SPECTRUM: barsSetup(false, false); break;
-    case M_MIRROR: barsSetup(false, true); break;
+    case M_SPECTRUM: barsSetup(false, false, 1, false); break;
+    case M_MIRROR: barsSetup(false, true, 1, false); break;
     case M_NEEDLES: needlesSetup(); break;
-    case M_STEREO: barsSetup(true, false); break;
+    case M_STEREO: barsSetup(true, false, 1, false); break;
     case M_WAVE: waveSetup(); break;
+    case M_SPECTRUM_L: barsSetup(false, false, 0, false); break;
+    case M_SPECTRUM_ST: barsSetup(false, false, 1, true); break;
   }
   shownMode = m;
 }
 void updateMode(uint8_t m) {
   switch (m) {
     case M_BARS: vuBarsUpdate(); break;
-    case M_SPECTRUM: case M_MIRROR: case M_STEREO: barsUpdate(); break;
+    case M_SPECTRUM: case M_MIRROR: case M_STEREO: case M_SPECTRUM_L: case M_SPECTRUM_ST: barsUpdate(); break;
     case M_NEEDLES: needlesUpdate(); break;
     case M_WAVE: waveUpdate(); break;
   }
