@@ -14,7 +14,11 @@
 /*  Bouton sur GPIO 33 (vers la masse) ou bouton BOOT de la carte :                              */
 /*    appui court        : mode suivant (Auto, Barres, Spectre, Miroir, Aiguilles, Stereo, Onde)  */
 /*    appui 1 a 5 s      : luminosite suivante (5 niveaux)                                       */
-/*    appui 5 s          : configuration de dalle suivante (redemarre)                            */
+/*    appui 5 s          : configuration de dalle suivante (redemarre) - secours du bouton 2      */
+/*                                                                                                */
+/*  Bouton 2 "dalle" sur GPIO 21 (vers la masse) : chaque appui passe a la dalle suivante         */
+/*  (64x64 -> 2x64x64 -> 128x64 -> 2x128x64), le choix est garde et applique 2 s apres le dernier */
+/*  appui (redemarrage).                                                                         */
 /*                                                                                                */
 /*  Mode demo : cavalier permanent entre GPIO 18 et la masse. Le son est alors une petite        */
 /*  musique synthetisee (batterie, basse, arpege stereo) a la place de l'entree audio.           */
@@ -48,6 +52,7 @@
 #define BTN_PIN 33   // bouton vers la masse (pull-up interne)
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
+#define LAYOUT_BTN_PIN 21  // bouton 2 vers la masse : type de dalle (pull-up interne)
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -649,6 +654,35 @@ void handleButton() {
   }
 }
 
+// ---------------------------------------------------------------- bouton 2 : type de dalle
+// Chaque appui avance d'une dalle (affichee) ; 2 s apres le dernier appui : enregistre et redemarre.
+void handleLayoutButton() {
+  static bool down = false;
+  static uint32_t changedAt = 0, pressAt = 0;
+  static int8_t pending = -1;
+  uint32_t now = millis();
+  bool pressed = digitalRead(LAYOUT_BTN_PIN) == LOW;
+  if (pressed && !down && now - pressAt > 60) {  // nouvel appui (anti-rebond)
+    down = true;
+    pressAt = now;
+    pending = ((pending < 0 ? layout : pending) + 1) % 4;
+    changedAt = now;
+    char m[24];
+    snprintf(m, sizeof(m), "Dalle %s", LAYOUT_NAME[pending]);
+    showMessage(m);
+  } else if (!pressed && down && now - pressAt > 60) {
+    down = false;
+  }
+  if (pending >= 0 && !down && now - changedAt > 2000) {
+    if (pending != layout) {
+      prefs.putUChar("layout", pending);
+      delay(50);
+      ESP.restart();
+    }
+    pending = -1;  // revenu sur la dalle actuelle : rien a faire
+  }
+}
+
 // ---------------------------------------------------------------- cavalier du mode demo (anti-rebond 100 ms)
 void handleDemoPin() {
   static uint32_t last = 0;
@@ -671,6 +705,7 @@ void setup() {
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(BOOT_PIN, INPUT_PULLUP);
   pinMode(DEMO_PIN, INPUT_PULLUP);
+  pinMode(LAYOUT_BTN_PIN, INPUT_PULLUP);
   delay(5);
   demoOn = digitalRead(DEMO_PIN) == LOW;
   prefs.begin("vu", false);
@@ -692,8 +727,13 @@ void setup() {
     delete dma;
     dma = nullptr;
   }
-  if (!dma) {  // impossible d'allouer la dalle
+  if (!dma) {  // impossible d'allouer la dalle : retour a 64x64 plutot que rester bloque
     Serial.println("Memoire insuffisante pour la dalle");
+    if (layout != 0) {
+      prefs.putUChar("layout", 0);
+      delay(50);
+      ESP.restart();
+    }
     for (;;) delay(1000);
   }
   W = LAYOUT_PANEL_W[layout] * LAYOUT_CHAIN[layout];
@@ -713,6 +753,7 @@ void loop() {
   static uint32_t lastSeq = 0;
   handleButton();
   handleDemoPin();
+  handleLayoutButton();
   uint8_t want = mode;
   if (mode == M_AUTO) {  // Auto : change de mode toutes les 20 s
     if (millis() - autoSince > AUTO_SECONDS * 1000UL) {
