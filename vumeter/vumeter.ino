@@ -12,7 +12,7 @@
 /*  par l'ADC1 via l'I2S0 (DMA), sans charger le processeur. La dalle utilise l'I2S1.            */
 /*                                                                                                */
 /*  Bouton sur GPIO 33 (vers la masse) ou bouton BOOT de la carte :                              */
-/*    appui court        : mode suivant (Auto, Barres, Spectre, Miroir, ...)                      */
+/*    appui court        : mode suivant (Auto, Spectre, Miroir, Aiguilles, ...)                   */
 /*    appui 1 a 5 s      : luminosite suivante (5 niveaux)                                       */
 /*    appui 5 s          : configuration de dalle suivante (redemarre) - secours du bouton 2      */
 /*                                                                                                */
@@ -58,7 +58,7 @@
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 #define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
-#define VU_VERSION "1.36"
+#define VU_VERSION "1.37"
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -68,8 +68,8 @@ const char *LAYOUT_NAME[4] = { "64x64", "2x64x64", "128x64", "2x128x64" };
 const uint8_t LAYOUT_PANEL_W[4] = { 64, 64, 128, 128 };
 const uint8_t LAYOUT_CHAIN[4] = { 1, 2, 1, 2 };
 // (nouveaux modes ajoutes a la fin : les numeros deja enregistres restent valables)
-enum Mode : uint8_t { M_AUTO, M_BARS, M_SPECTRUM, M_MIRROR, M_NEEDLES, M_STEREO, M_WAVE, M_SPECTRUM_L, M_SPECTRUM_ST, M_COUNT };
-const char *MODE_NAME[M_COUNT] = { "Auto", "Barres", "Spectre", "Miroir", "Aiguilles", "Stereo", "Onde", "SpectreL", "Spectre St" };
+enum Mode : uint8_t { M_AUTO, M_SPECTRUM, M_MIRROR, M_NEEDLES, M_STEREO, M_SPECTRUM_ST, M_GAME, M_POWER, M_WATTS, M_COUNT };
+const char *MODE_NAME[M_COUNT] = { "Auto", "Spectre", "Miroir", "Aiguilles", "Stereo", "Spectre St", "Jeu", "Puissance", "Watts" };
 const uint8_t BRIGHT[5] = { 20, 45, 80, 140, 220 };
 #define AUTO_SECONDS 20
 
@@ -334,16 +334,6 @@ uint16_t hsv(float h, float s, float v) {  // h 0..360
   else if (h < 240) { r = 0; g = x; b = c; } else if (h < 300) { r = x; g = 0; b = c; } else { r = c; g = 0; b = x; }
   return rgb((r + m) * 255, (g + m) * 255, (b + m) * 255);
 }
-uint16_t dimmed(uint16_t c, int shift) {  // meme teinte, plus sombre (cases eteintes)
-  uint8_t r = ((c >> 11) & 31) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3;
-  return rgb(r >> shift, g >> shift, b >> shift);
-}
-uint16_t zoneColor(float f) {  // vert, jaune, rouge selon la hauteur
-  if (f > 0.88f) return rgb(255, 30, 20);
-  if (f > 0.72f) return rgb(255, 190, 0);
-  return rgb(20, 220, 40);
-}
-
 // ---------------------------------------------------------------- gain automatique et dynamique des barres
 float agcRef = -20;   // niveau (dB) affiche en haut de l'echelle, suit la musique
 const float RANGE_DB = 45;
@@ -455,64 +445,10 @@ void barsUpdate() {
   }
 }
 
-// ---------------------------------------------------------------- mode Barres : VU stereo horizontal a segments
-Ballistic vuBar[2];
-int vuShown[2] = { 0, 0 }, vuCap[2] = { -1, -1 };
-const int VU_LBL = 8;
-int vuSegW() { return W >= 256 ? 5 : W >= 128 ? 4 : 3; }
-int vuSegs() { return (W - VU_LBL) / vuSegW(); }
-void vuDrawSeg(int c, int s, bool lit, bool cap) {
-  int n = vuSegs(), sw = vuSegW(), x = VU_LBL + s * sw, y = c ? 36 : 6;
-  float f = (s + 1.0f) / n;
-  uint16_t on = f > 0.88f ? rgb(255, 30, 20) : rgb(30, 110, 255);  // barres bleues, rouge en saturation
-  uint16_t col = cap ? rgb(255, 255, 255) : lit ? on : dimmed(on, 4);
-  dma->fillRect(x, y, sw - 1, 22, col);
-}
-void vuBarsSetup() {
-  dma->fillScreen(0);
-  dma->setFont(NULL);
-  dma->setTextSize(1);
-  dma->setTextColor(rgb(160, 160, 160));
-  dma->setCursor(1, 13);
-  dma->print("L");
-  dma->setCursor(1, 43);
-  dma->print("R");
-  // echelle entre les deux barres : graduations a -40 -30 -20 -10 -6 -3 0 dB (sous la reference)
-  static const int8_t TICKS[7] = { -40, -30, -20, -10, -6, -3, 0 };
-  int n = vuSegs(), sw = vuSegW();
-  dma->drawFastHLine(VU_LBL, 31, n * sw - 1, rgb(60, 60, 60));
-  for (int t = 0; t < 7; t++) {
-    float f = (TICKS[t] + RANGE_DB) / RANGE_DB;
-    int x = VU_LBL + (int)(f * n * sw) - 1;
-    dma->drawFastVLine(constrain(x, VU_LBL, W - 2), 29, 5, TICKS[t] >= -3 ? rgb(200, 40, 30) : rgb(120, 120, 120));
-  }
-  for (int c = 0; c < 2; c++) {
-    vuShown[c] = 0;
-    vuCap[c] = -1;
-    for (int s = 0; s < n; s++) vuDrawSeg(c, s, false, false);
-  }
-}
-void vuBarsUpdate() {
-  int n = vuSegs();
-  for (int c = 0; c < 2; c++) {
-    vuBar[c].update(view.rmsDb[c] < GATE_DB ? 0 : norm01(view.rmsDb[c] + 6));
-    int lit = (int)(vuBar[c].v * n + 0.5f), cap = min(n - 1, (int)(vuBar[c].peak * n));
-    if (cap < lit || vuBar[c].peak < 0.02f) cap = -1;
-    for (int s = min(lit, vuShown[c]); s < max(lit, vuShown[c]); s++) vuDrawSeg(c, s, s < lit, false);
-    if (vuCap[c] != cap) {
-      if (vuCap[c] >= 0) vuDrawSeg(c, vuCap[c], vuCap[c] < lit, false);
-      if (cap >= 0) vuDrawSeg(c, cap, false, true);
-    }
-    vuShown[c] = lit;
-    vuCap[c] = cap;
-  }
-}
-
 // ---------------------------------------------------------------- mode Aiguilles : deux vu-metres analogiques
 GFXcanvas16 *dialCv = nullptr;
 int dialW, dialH;
 float needle[2] = { 0, 0 }, needleV[2] = { 0, 0 };
-int clipHold[2] = { 0, 0 };
 float vuPos(float dbVU) {  // loi des vu-metres : -20 VU a gauche, +3 VU a droite
   float lin = powf(10, dbVU / 20), lo = powf(10, -20 / 20.0f), hi = powf(10, 3 / 20.0f);
   return constrain((lin - lo) / (hi - lo), 0.0f, 1.0f);
@@ -547,7 +483,6 @@ void drawDial(int c) {
   cv.print("VU");
   cv.setCursor(2, dialH - 9);
   cv.print(c ? "R" : "L");
-  if (clipHold[c] > 0) cv.fillCircle(dialW - 5, dialH - 6, 2, rgb(255, 30, 20));  // voyant de crete
   float a = A0 + (A1 - A0) * needle[c];
   cv.drawLine(px, py, px + sinf(a) * (r - 1), py - cosf(a) * (r - 1), ink);  // aiguille fine : 1 pixel
   int ox = W >= 128 ? c * dialW : 0, oy = W >= 128 ? 0 : c * dialH;
@@ -561,69 +496,437 @@ void needlesUpdate() {
     needleV[c] += (target - needle[c]) * 0.09f;  // aiguille avec inertie
     needleV[c] *= 0.72f;
     needle[c] = constrain(needle[c] + needleV[c], -0.02f, 1.02f);
-    if (view.peakDb[c] > agcRef + 2) clipHold[c] = 15;
-    else if (clipHold[c] > 0) clipHold[c]--;
     drawDial(c);
   }
 }
 
-// ---------------------------------------------------------------- mode Onde : oscilloscope gauche (haut) et droite (bas)
-int8_t waveLo[2][256], waveHi[2][256];
-void waveSetup() {
-  dma->fillScreen(0);
-  for (int c = 0; c < 2; c++)
-    for (int x = 0; x < 256; x++) waveLo[c][x] = waveHi[c][x] = -1;
+// ---------------------------------------------------------------- modes Puissance et Watts : cadrans d'ampli hi-fi
+// Puissance (style 0) : cadran noir retroeclaire en bleu par le bas, eventail de rayons blancs,
+//                       aiguille rouge, voyant PEAK blanc au centre.
+// Watts (style 1)     : cadran bleu clair, bande d'echelle bleu marine en arc (watts au-dessus,
+//                       decibels en dessous), aiguille bleu marine.
+// Le fond de chaque cadran est dessine une fois ; a chaque image on le recopie et on ajoute l'aiguille.
+GFXcanvas16 *ampBg = nullptr, *ampCv = nullptr;
+int ampW = 0, ampH = 0, ampStyle = 0, peakHold = 0;
+float ampPx = 0, ampPy = 0, ampR = 0;
+const float AMP_A0 = -0.8f, AMP_A1 = 0.8f;  // angles extremes de l'aiguille (radians)
+// echelles : dB (0 = niveau nominal) -> position 0..1 sur le cadran
+const int8_t PWR_DB[7] = { -40, -30, -20, -10, -5, 0, 3 };
+const float PWR_POS[7] = { 0, 0.17f, 0.40f, 0.66f, 0.78f, 0.90f, 1.0f };
+const int8_t WAT_DB[8] = { -60, -50, -40, -30, -20, -10, 0, 5 };
+const float WAT_POS[8] = { 0, 0.10f, 0.25f, 0.38f, 0.50f, 0.66f, 0.85f, 1.0f };
+float scalePos(const int8_t *db, const float *pos, int n, float v) {
+  if (v <= db[0]) return 0;
+  for (int i = 1; i < n; i++)
+    if (v <= db[i]) return pos[i - 1] + (pos[i] - pos[i - 1]) * (v - db[i - 1]) / (db[i] - db[i - 1]);
+  return 1;
 }
-void waveUpdate() {
-  float gain = powf(10, -(agcRef - 6) / 20) / 2048.0f * 15;  // la musique remplit la moitie d'ecran
-  int per = max(1, WAVE_N / W);
-  for (int c = 0; c < 2; c++) {
-    int y0 = c ? 47 : 15;
-    uint16_t col = c ? rgb(255, 120, 20) : rgb(30, 200, 255);
-    for (int x = 0; x < W; x++) {
-      int lo = 99, hi = -99;
-      for (int k = 0; k < per; k++) {
-        int y = (int)(view.wave[c][x * per + k] * gain);
-        lo = min(lo, y);
-        hi = max(hi, y);
+float ampPos(float db) { return ampStyle ? scalePos(WAT_DB, WAT_POS, 8, db) : scalePos(PWR_DB, PWR_POS, 7, db); }
+
+// petite police 3x5 (chiffres et quelques lettres) pour les graduations
+const uint8_t TF_DIG[10][5] = { { 7, 5, 5, 5, 7 }, { 2, 6, 2, 2, 7 }, { 7, 1, 7, 4, 7 }, { 7, 1, 7, 1, 7 }, { 5, 5, 7, 1, 1 },
+                                { 7, 4, 7, 1, 7 }, { 7, 4, 7, 5, 7 }, { 7, 1, 1, 1, 1 }, { 7, 5, 7, 5, 7 }, { 7, 5, 7, 1, 7 } };
+const uint8_t TF_L[5] = { 4, 4, 4, 4, 7 }, TF_R[5] = { 6, 5, 6, 5, 5 }, TF_P[5] = { 6, 5, 6, 4, 4 }, TF_E[5] = { 7, 4, 6, 4, 7 },
+              TF_A[5] = { 2, 5, 7, 5, 5 }, TF_K[5] = { 5, 5, 6, 5, 5 }, TF_M[5] = { 0, 6, 7, 5, 5 }, TF_DOT[5] = { 0, 0, 0, 0, 2 };
+const uint8_t *tfGlyph(char c) {
+  if (c >= '0' && c <= '9') return TF_DIG[c - '0'];
+  switch (c) {
+    case 'L': return TF_L; case 'R': return TF_R; case 'P': return TF_P; case 'E': return TF_E;
+    case 'A': return TF_A; case 'K': return TF_K; case 'm': return TF_M; case '.': return TF_DOT;
+  }
+  return nullptr;
+}
+int tinyWidth(const char *s) { return strlen(s) * 4 - 1; }
+void tinyText(Adafruit_GFX &g, int x, int y, const char *s, uint16_t col) {
+  for (; *s; s++, x += 4) {
+    const uint8_t *gl = tfGlyph(*s);
+    if (!gl) continue;
+    for (int r = 0; r < 5; r++)
+      for (int c = 0; c < 3; c++)
+        if (gl[r] & (4 >> c)) g.drawPixel(x + c, y + r, col);
+  }
+}
+// texte centre sur un point de l'arc (rayon rr, position p de 0 a 1)
+void ampLabel(GFXcanvas16 &cv, float p, float rr, const char *s, uint16_t col) {
+  float a = AMP_A0 + (AMP_A1 - AMP_A0) * p;
+  int x = constrain((int)(ampPx + sinf(a) * rr - tinyWidth(s) / 2.0f), 1, ampW - 1 - tinyWidth(s)), y = ampPy - cosf(a) * rr - 2;  // reste dans le cadran
+  tinyText(cv, x, y, s, col);
+}
+void ampSpoke(GFXcanvas16 &cv, float p, float r0, float r1, uint16_t col) {
+  float a = AMP_A0 + (AMP_A1 - AMP_A0) * p, s = sinf(a), c = cosf(a);
+  cv.drawLine(ampPx + s * r0, ampPy - c * r0, ampPx + s * r1, ampPy - c * r1, col);
+}
+void ampFree() {
+  if (ampBg) { delete ampBg; ampBg = nullptr; }
+  if (ampCv) { delete ampCv; ampCv = nullptr; }
+}
+void ampSetup(int style) {
+  dma->fillScreen(0);
+  ampStyle = style;
+  if (W >= 128) { ampW = W / 2; ampH = H; } else { ampW = W; ampH = H / 2; }  // 64x64 : cadrans l'un sur l'autre
+  ampFree();
+  ampBg = new GFXcanvas16(ampW, ampH);
+  ampCv = new GFXcanvas16(ampW, ampH);
+  if (!ampBg->getBuffer() || !ampCv->getBuffer()) { ampFree(); return; }
+  bool big = ampH >= 48;  // place pour les graduations chiffrees
+  ampR = min(ampH * 1.12f, (ampW / 2 - 2) / sinf(AMP_A1));
+  ampPx = ampW / 2.0f;
+  ampPy = (big ? 14 : 6) + ampR;
+  GFXcanvas16 &cv = *ampBg;
+  if (style == 0) {
+    for (int y = 0; y < ampH; y++) {  // noir en haut, lueur bleue en bas (eclairage du cadran)
+      float f = (float)y / ampH, g = f > 0.5f ? (f - 0.5f) / 0.5f : 0;
+      g *= g;
+      cv.drawFastHLine(0, y, ampW, rgb(2 + 25 * g, 3 + 60 * g, 12 + 210 * g));
+    }
+    static const int8_t MINOR[4] = { -35, -25, -15, -7 };
+    for (int i = 0; i < 4; i++) ampSpoke(cv, scalePos(PWR_DB, PWR_POS, 7, MINOR[i]), ampR * 0.62f, ampR * 0.92f, rgb(90, 100, 150));
+    for (int i = 0; i < 7; i++) {
+      float p = PWR_POS[i];
+      ampSpoke(cv, p, ampR * 0.42f, ampR, rgb(225, 230, 255));
+      if (big) {
+        char t[4];
+        snprintf(t, sizeof(t), "%d", abs(PWR_DB[i]));
+        ampLabel(cv, p, ampR + 5, t, rgb(235, 240, 255));
       }
-      lo = constrain(y0 - hi, c * 32, c * 32 + 31);
-      hi = constrain(y0 - min(lo, hi) , c * 32, c * 32 + 31);
-      int oldLo = waveLo[c][x], oldHi = waveHi[c][x];
-      if (oldLo == lo && oldHi == hi) continue;
-      if (oldLo >= 0) dma->drawFastVLine(x, oldLo, oldHi - oldLo + 1, 0);
-      dma->drawPixel(x, y0, rgb(30, 30, 30));
-      dma->drawFastVLine(x, lo, hi - lo + 1, col);
-      waveLo[c][x] = lo;
-      waveHi[c][x] = hi;
+    }
+  } else {
+    for (int y = 0; y < ampH; y++) {  // bleu clair, plus lumineux en bas
+      float f = (float)y / ampH, g = f > 0.6f ? (f - 0.6f) / 0.4f : 0;
+      cv.drawFastHLine(0, y, ampW, rgb(70 + 80 * g, 150 + 60 * g, 245 + 10 * g));
+    }
+    uint16_t navy = rgb(8, 18, 110);
+    int steps = ampR * 4;
+    for (int k = 0; k <= steps; k++) {  // bande epaisse, coupee a chaque graduation, plus large a droite
+      float p = (float)k / steps;
+      bool gap = false;
+      for (int i = 1; i < 7; i++) gap |= fabsf(p - WAT_POS[i]) < 0.006f;
+      if (gap) continue;
+      float a = AMP_A0 + (AMP_A1 - AMP_A0) * p, s = sinf(a), c = cosf(a);
+      int thick = p > 0.85f ? 4 : 3;
+      for (int t = 0; t < thick; t++) cv.drawPixel(ampPx + s * (ampR - t), ampPy - c * (ampR - t), navy);
+    }
+    if (big) {
+      bool wide = ampW >= 100;
+      static const char *WT[6] = { "5.0m", "50m", "100", "150", "200", "250" };
+      static const float WP[6] = { 0.05f, 0.22f, 0.40f, 0.53f, 0.67f, 0.84f };
+      for (int i = 0; i < 6; i++)
+        if (wide || i == 1 || i == 2 || i == 4) ampLabel(cv, WP[i], ampR + 5, WT[i], navy);  // watts au-dessus
+      for (int i = 1; i < 7; i++)
+        if (wide || i % 2 == 0) {  // decibels en dessous
+          char t[4];
+          snprintf(t, sizeof(t), "%d", abs(WAT_DB[i]));
+          ampLabel(cv, WAT_POS[i], ampR - 9, t, navy);
+        }
     }
   }
+}
+void ampUpdate() {
+  if (!ampCv) return;
+  uint16_t needleCol = ampStyle ? rgb(8, 18, 110) : rgb(255, 40, 30);
+  for (int c = 0; c < 2; c++) {
+    float target = view.rmsDb[c] < GATE_DB ? 0 : ampPos(view.rmsDb[c] - (agcRef - 8));
+    needleV[c] += (target - needle[c]) * 0.09f;  // aiguille avec inertie
+    needleV[c] *= 0.72f;
+    needle[c] = constrain(needle[c] + needleV[c], -0.02f, 1.02f);
+    memcpy(ampCv->getBuffer(), ampBg->getBuffer(), ampW * ampH * 2);
+    tinyText(*ampCv, c ? ampW - 5 : 2, ampH - 6, c ? "R" : "L", ampStyle ? rgb(8, 18, 110) : rgb(150, 160, 200));  // L a gauche, R a droite
+    float a = AMP_A0 + (AMP_A1 - AMP_A0) * needle[c];
+    ampCv->drawLine(ampPx, ampPy, ampPx + sinf(a) * (ampR + 3), ampPy - cosf(a) * (ampR + 3), needleCol);
+    int ox = W >= 128 ? c * ampW : 0, oy = W >= 128 ? 0 : c * ampH;
+    dma->drawRGBBitmap(ox, oy, ampCv->getBuffer(), ampW, ampH);
+  }
+  if (ampStyle == 0) {  // voyant PEAK
+    if (max(view.peakDb[0], view.peakDb[1]) > agcRef + 1) peakHold = 12;
+    else if (peakHold > 0) peakHold--;
+    uint16_t led = peakHold ? rgb(230, 240, 255) : rgb(25, 30, 50);
+    if (W >= 128) {
+      tinyText(*dma, W / 2 - 7, H - 18, "PEAK", rgb(200, 205, 230));
+      if (peakHold) dma->drawCircle(W / 2, H - 8, 3, rgb(40, 80, 220));
+      dma->fillCircle(W / 2, H - 8, 2, led);
+    } else {
+      dma->fillCircle(W - 4, H / 2, 1, led);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- mode Jeu : petit shoot'em up qui joue tout seul
+// Vaisseau en bas pilote automatiquement, formation d'ennemis qui oscille, ennemis qui piquent.
+// Reagit a la musique : ennemis plus lumineux sur les basses, etoiles plus rapides quand le son monte.
+// Dessin sans scintillement : seuls les rectangles dessines a l'image precedente sont effaces.
+#define G_MAXE 36
+#define G_SHOTS 3
+#define G_BOMBS 8
+#define G_BOOMS 8
+#define G_STARS 48
+#define G_RECTS 160
+const int G_PY = 57;  // ligne du haut du vaisseau
+const int G_ROWS = 3;
+struct GEnemy { float x, y, vx, vy; int8_t row, col; uint8_t state; bool alive; };  // state : 0 rang, 1 pique, 2 retour
+struct GDot { float x, y; bool on; };
+struct GBoom { int16_t x, y; uint8_t t; };
+struct GStar { int16_t x; float y, v; };
+struct GRect { int16_t x, y; uint8_t w, h; };
+GEnemy gEn[G_MAXE];
+GDot gShot[G_SHOTS], gBomb[G_BOMBS];
+GBoom gBoom[G_BOOMS];
+GStar gStar[G_STARS];
+GRect gOld[G_RECTS];
+int gNE = 0, gCols = 4, gNStar = 0, gNOld = 0, gLives = 0, gWave = 0, gDead = 0, gCool = 0;
+uint32_t gFrame = 0, gScore = 0, gLastStep = 0;
+float gPx = 0, gSway = 0;
+// sprites 7 pixels de large (bit 6 = colonne de gauche)
+const uint8_t SPR_SHIP[5] = { 0b0001000, 0b0011100, 0b0111110, 0b1111111, 0b1001001 };
+const uint8_t SPR_EN[2][5] = { { 0b0100010, 0b0011100, 0b0110110, 0b1111111, 0b1010101 },
+                               { 0b1000001, 0b0111110, 0b1101011, 0b0111110, 0b0100010 } };
+const float G_HUE[G_ROWS] = { 300, 35, 140 };  // magenta, orange, vert
+
+void gMark(int x, int y, int w, int h) {
+  if (gNOld < G_RECTS) gOld[gNOld++] = { (int16_t)x, (int16_t)y, (uint8_t)w, (uint8_t)h };
+}
+void gPix(int x, int y, uint16_t c) {
+  if (x >= 0 && x < W && y >= 0 && y < H) dma->drawPixel(x, y, c);
+  gMark(x, y, 1, 1);
+}
+void gSprite(const uint8_t *rows, int h, int x, int y, uint16_t col) {
+  for (int r = 0; r < h; r++)
+    for (int c = 0; c < 7; c++)
+      if (rows[r] & (0x40 >> c)) {
+        int px = x + c, py = y + r;
+        if (px >= 0 && px < W && py >= 0 && py < H) dma->drawPixel(px, py, col);
+      }
+  gMark(x, y, 7, h);
+}
+float gSlotX(int col) { return (W - gCols * 10) / 2 + 1 + col * 10 + gSway; }
+float gSlotY(int row) { return 9 + row * 7; }
+void gBoomAt(int x, int y) {
+  for (int i = 0; i < G_BOOMS; i++)
+    if (gBoom[i].t == 0) { gBoom[i] = { (int16_t)x, (int16_t)y, 1 }; return; }
+}
+void gNewWave() {
+  gCols = constrain((W - 14) / 10, 4, 12);
+  gNE = 0;
+  for (int r = 0; r < G_ROWS; r++)
+    for (int c = 0; c < gCols && gNE < G_MAXE; c++) {
+      GEnemy &e = gEn[gNE++];
+      e = {};
+      e.row = r; e.col = c; e.alive = true;
+      e.x = gSlotX(c); e.y = -8 - 6 * (G_ROWS - r);  // arrivent du haut
+      e.state = 2;
+    }
+  gWave++;
+}
+void gReset() {
+  gLives = 3; gScore = 0; gWave = 0; gDead = 0; gCool = 0;
+  gPx = W / 2 - 3;
+  for (auto &s : gShot) s.on = false;
+  for (auto &b : gBomb) b.on = false;
+  for (auto &b : gBoom) b.t = 0;
+  gNewWave();
+}
+void gameSetup() {
+  dma->fillScreen(0);
+  gNOld = 0;
+  if (gLives <= 0 && gDead == 0) gReset();
+  gNStar = min(G_STARS, W / 4);
+  for (int i = 0; i < gNStar; i++) gStar[i] = { (int16_t)random(W), (float)random(8, H), 0.2f + random(100) / 120.0f };
+  gLastStep = millis();
+}
+void gHitPlayer() {
+  gBoomAt(gPx + 3, G_PY + 2);
+  gLives--;
+  gDead = gLives > 0 ? 50 : 120;  // pause avant le vaisseau suivant (plus longue apres GAME OVER)
+}
+void gameStep() {
+  gFrame++;
+  float loud = view.rmsDb[0] < GATE_DB ? 0 : norm01(max(view.rmsDb[0], view.rmsDb[1]) + 6);
+  // etoiles
+  for (int i = 0; i < gNStar; i++) {
+    GStar &s = gStar[i];
+    s.y += s.v * (0.4f + 2.5f * loud);
+    if (s.y >= H) { s.y = 8; s.x = random(W); }
+  }
+  // formation et piques
+  gSway = sinf(gFrame * 0.03f) * max(1, min(6, (W - gCols * 10) / 2 - 1));
+  int alive = 0;
+  for (int i = 0; i < gNE; i++) alive += gEn[i].alive;
+  int diveEvery = max(18, 70 - gWave * 8);
+  if (gDead == 0 && gFrame % diveEvery == 0 && alive) {
+    int k = random(gNE);
+    for (int t = 0; t < gNE; t++, k = (k + 1) % gNE)
+      if (gEn[k].alive && gEn[k].state == 0) { gEn[k].state = 1; gEn[k].vx = 0; gEn[k].vy = 0.5f; break; }
+  }
+  for (int i = 0; i < gNE; i++) {
+    GEnemy &e = gEn[i];
+    if (!e.alive) continue;
+    float sx = gSlotX(e.col), sy = gSlotY(e.row);
+    if (e.state == 0) {
+      e.x = sx; e.y = sy;
+    } else if (e.state == 1) {  // pique en visant le vaisseau
+      e.vx = constrain(e.vx + ((gPx + 3) - (e.x + 3)) * 0.004f, -1.3f, 1.3f);
+      e.vy = min(e.vy + 0.012f, 1.4f + 0.1f * gWave);
+      e.x += e.vx; e.y += e.vy;
+      if (e.y > H) { e.y = -6; e.state = 2; }
+    } else {  // retour a sa place
+      float dx = sx - e.x, dy = sy - e.y;
+      e.x += constrain(dx * 0.08f, -1.5f, 1.5f);
+      e.y += constrain(dy * 0.08f, -1.5f, 1.5f);
+      if (fabsf(dx) < 0.6f && fabsf(dy) < 0.6f) e.state = 0;
+    }
+    // tirs ennemis
+    int chance = e.state == 1 ? 20 : 2 + gWave;
+    if (gDead == 0 && e.y > 0 && e.y < 40 && random(1000) < chance)
+      for (auto &b : gBomb)
+        if (!b.on) { b = { e.x + 3, e.y + 5, true }; break; }
+    // collision avec le vaisseau
+    if (gDead == 0 && e.state == 1 && e.x + 6 >= gPx && e.x <= gPx + 6 && e.y + 4 >= G_PY && e.y <= G_PY + 4) {
+      e.alive = false;
+      gBoomAt(e.x + 3, e.y + 2);
+      gHitPlayer();
+    }
+  }
+  // pilote automatique : esquive les tirs, sinon vise un ennemi en pique ou la colonne la plus proche
+  if (gDead == 0) {
+    float target = gPx, cx = gPx + 3;
+    bool dodge = false;
+    for (auto &b : gBomb)
+      if (b.on && b.y > G_PY - 22 && fabsf(b.x - cx) < 5) { target = b.x < cx ? gPx + 6 : gPx - 6; dodge = true; break; }
+    if (!dodge) {
+      float best = 1e9;
+      for (int i = 0; i < gNE; i++) {
+        GEnemy &e = gEn[i];
+        if (!e.alive || e.y < 0) continue;
+        float d = fabsf(e.x - gPx) - (e.state == 1 ? 40 : 0);  // priorite aux ennemis en pique
+        if (d < best) { best = d; target = e.x; }
+      }
+    }
+    gPx += constrain(target - gPx, -1.2f, 1.2f);
+    gPx = constrain(gPx, 0.0f, (float)(W - 7));
+    // tir quand un ennemi est au-dessus
+    if (gCool > 0) gCool--;
+    if (gCool == 0)
+      for (int i = 0; i < gNE; i++)
+        if (gEn[i].alive && gEn[i].y > 0 && fabsf(gEn[i].x - gPx) < 4) {
+          for (auto &s : gShot)
+            if (!s.on) { s = { gPx + 3, (float)G_PY - 3, true }; gCool = 7; break; }
+          break;
+        }
+  } else if (--gDead == 0 && gLives <= 0) {
+    gReset();  // fin de partie : on recommence
+  }
+  // tirs du vaisseau
+  for (auto &s : gShot) {
+    if (!s.on) continue;
+    s.y -= 3;
+    if (s.y < 0) { s.on = false; continue; }
+    for (int i = 0; i < gNE; i++) {
+      GEnemy &e = gEn[i];
+      if (e.alive && s.x >= e.x && s.x <= e.x + 6 && s.y <= e.y + 4 && s.y + 2 >= e.y) {
+        e.alive = false;
+        s.on = false;
+        gScore += e.state == 1 ? 150 : 50;
+        gBoomAt(e.x + 3, e.y + 2);
+        break;
+      }
+    }
+  }
+  // tirs ennemis
+  for (auto &b : gBomb) {
+    if (!b.on) continue;
+    b.y += 1.3f + 0.1f * gWave;
+    if (b.y >= H) { b.on = false; continue; }
+    if (gDead == 0 && b.x >= gPx && b.x <= gPx + 6 && b.y + 1 >= G_PY && b.y <= G_PY + 4) { b.on = false; gHitPlayer(); }
+  }
+  for (auto &b : gBoom)
+    if (b.t) b.t = b.t >= 9 ? 0 : b.t + 1;
+  bool any = false;
+  for (int i = 0; i < gNE; i++) any |= gEn[i].alive;
+  if (!any) gNewWave();
+}
+void gameDraw() {
+  for (int i = 0; i < gNOld; i++) {  // efface l'image precedente
+    GRect &r = gOld[i];
+    int x0 = max(0, (int)r.x), y0 = max(0, (int)r.y), x1 = min(W, r.x + r.w), y1 = min(H, r.y + r.h);
+    if (x1 > x0 && y1 > y0) dma->fillRect(x0, y0, x1 - x0, y1 - y0, 0);
+  }
+  gNOld = 0;
+  for (int i = 0; i < gNStar; i++) {
+    uint8_t v = 40 + gStar[i].v * 120;
+    gPix(gStar[i].x, (int)gStar[i].y, rgb(v, v, v));
+  }
+  float bass = -120;
+  for (int b = 0; b < 6; b++) bass = max(bass, max(view.bandDb[0][b], view.bandDb[1][b]));
+  float glow = norm01(bass + SPEC_BOOST);
+  for (int i = 0; i < gNE; i++) {
+    GEnemy &e = gEn[i];
+    if (!e.alive) continue;
+    int fr = e.state == 1 ? (gFrame / 4) & 1 : ((gFrame / 16) + e.col) & 1;  // battement d'ailes
+    gSprite(SPR_EN[fr], 5, (int)e.x, (int)e.y, hsv(G_HUE[e.row], 1, 0.45f + 0.55f * glow));
+  }
+  for (auto &s : gShot)
+    if (s.on) { gPix(s.x, s.y, rgb(255, 230, 0)); gPix(s.x, s.y + 1, rgb(255, 230, 0)); gPix(s.x, s.y + 2, rgb(160, 120, 0)); }
+  for (auto &b : gBomb)
+    if (b.on) { gPix(b.x, b.y, rgb(255, 40, 30)); gPix(b.x, b.y + 1, rgb(255, 40, 30)); }
+  static const int8_t DX[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, DY[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+  for (auto &b : gBoom) {
+    if (!b.t) continue;
+    uint16_t c = b.t < 4 ? rgb(255, 255, 160) : b.t < 7 ? rgb(255, 140, 0) : rgb(140, 30, 0);
+    for (int k = 0; k < 8; k++) gPix(b.x + DX[k] * b.t / 2, b.y + DY[k] * b.t / 2, c);
+  }
+  if (gDead == 0) gSprite(SPR_SHIP, 5, (int)gPx, G_PY, rgb(0, 200, 255));
+  // score et vies
+  dma->setFont(NULL);
+  dma->setTextSize(1);
+  dma->setTextColor(rgb(200, 200, 200));
+  char sc[12];
+  snprintf(sc, sizeof(sc), "%lu", (unsigned long)gScore);
+  dma->setCursor(1, 0);
+  dma->print(sc);
+  gMark(1, 0, strlen(sc) * 6, 8);
+  for (int i = 0; i < gLives; i++) {
+    dma->fillRect(W - 4 - i * 5, 2, 3, 3, rgb(0, 200, 255));
+    gMark(W - 4 - i * 5, 2, 3, 3);
+  }
+  if (gLives <= 0 && gDead > 0) {
+    dma->setTextColor(rgb(255, 60, 40));
+    dma->setCursor(W / 2 - 27, 28);
+    dma->print("GAME OVER");
+    gMark(W / 2 - 27, 28, 54, 8);
+  }
+}
+void gameUpdate() {
+  uint32_t now = millis();
+  if (now - gLastStep < 25) return;  // 40 images par seconde
+  gLastStep = now - gLastStep > 100 ? now : gLastStep + 25;
+  gameStep();
+  gameDraw();
 }
 
 // ---------------------------------------------------------------- choix du mode
 uint8_t shownMode = 255;
 uint32_t autoSince = 0;
-uint8_t autoMode = M_BARS;
+uint8_t autoMode = M_SPECTRUM;
 void enterMode(uint8_t m) {
   if (dialCv && m != M_NEEDLES) { delete dialCv; dialCv = nullptr; }
+  if (m != M_POWER && m != M_WATTS) ampFree();
   switch (m) {
-    case M_BARS: vuBarsSetup(); break;
     case M_SPECTRUM: barsSetup(false, false, 1, false); break;
     case M_MIRROR: barsSetup(false, true, 1, false); break;
     case M_NEEDLES: needlesSetup(); break;
     case M_STEREO: barsSetup(true, false, 1, false); break;
-    case M_WAVE: waveSetup(); break;
-    case M_SPECTRUM_L: barsSetup(false, false, 0, false); break;
+    case M_GAME: gameSetup(); break;
+    case M_POWER: ampSetup(0); break;
+    case M_WATTS: ampSetup(1); break;
     case M_SPECTRUM_ST: barsSetup(false, false, 1, true); break;
   }
   shownMode = m;
 }
 void updateMode(uint8_t m) {
   switch (m) {
-    case M_BARS: vuBarsUpdate(); break;
-    case M_SPECTRUM: case M_MIRROR: case M_STEREO: case M_SPECTRUM_L: case M_SPECTRUM_ST: barsUpdate(); break;
+    case M_SPECTRUM: case M_MIRROR: case M_STEREO: case M_SPECTRUM_ST: barsUpdate(); break;
     case M_NEEDLES: needlesUpdate(); break;
-    case M_WAVE: waveUpdate(); break;
+    case M_GAME: gameUpdate(); break;
+    case M_POWER: case M_WATTS: ampUpdate(); break;
   }
 }
 
@@ -849,6 +1152,7 @@ void loop() {
     if (millis() - autoSince > AUTO_SECONDS * 1000UL) {
       autoSince = millis();
       autoMode = autoMode % (M_COUNT - 1) + 1;
+      if (autoMode == M_GAME && !demoOn) autoMode = autoMode % (M_COUNT - 1) + 1;  // le jeu fait partie de la demo
     }
     want = autoMode;
   }

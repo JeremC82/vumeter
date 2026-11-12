@@ -62,26 +62,6 @@ def text(px, x, y, s, col):
 
 
 # ---------------------------------------------------------------- les modes (geometrie de vumeter.ino)
-def mode_barres():
-    im = Image.new('RGB', (W, H)); d = ImageDraw.Draw(im)
-    text(im, 1, 13, 'L', (160, 160, 160)); text(im, 1, 43, 'R', (160, 160, 160))
-    sw, n = 4, (W - 8) // 4
-    d.line((8, 31, 8 + n * sw - 2, 31), fill=(60, 60, 60))
-    for t in (-40, -30, -20, -10, -6, -3, 0):
-        x = 8 + int((t + 45) / 45 * n * sw) - 1
-        x = max(8, min(W - 2, x))
-        d.line((x, 29, x, 33), fill=(200, 40, 30) if t >= -3 else (120, 120, 120))
-    for c in range(2):
-        lit, cap = int(RMS[c] * n + 0.5), min(n - 1, int((RMS[c] + 0.08) * n))
-        for s in range(n):
-            f = (s + 1) / n
-            on = (255, 30, 20) if f > 0.88 else (30, 110, 255)  # barres bleues, rouge en saturation
-            col = WHITE if s == cap else on if s < lit else dim(on)
-            x, y = 8 + s * sw, 36 if c else 6
-            d.rectangle((x, y, x + sw - 2, y + 21), fill=col)
-    return im
-
-
 def bars(stereo=False, center=False, gap=1, dual=False):
     """Moteur de barres de vumeter.ino : fond noir, cretes blanches (ou rouge / blanc / jaune en double)."""
     im = Image.new('RGB', (W, H)); d = ImageDraw.Draw(im)
@@ -157,27 +137,139 @@ def mode_aiguilles():
             p += 0.01
         text(cv, dw // 2 - 5, dh - 10, 'VU', ink)
         text(cv, 2, dh - 9, 'R' if c else 'L', ink)
-        if c == 0: d.ellipse((dw - 7, dh - 8, dw - 3, dh - 4), fill=(255, 30, 20))
         a = a0 + (a1 - a0) * needle
         d.line((px, py, px + math.sin(a) * (r - 1), py - math.cos(a) * (r - 1)), fill=ink)  # aiguille fine
         im.paste(cv, (c * dw, 0))
     return im
 
 
-def mode_onde():
+def mode_jeu():
+    """Mode Jeu : shoot'em up automatique (sprites de vumeter.ino)."""
     im = Image.new('RGB', (W, H)); d = ImageDraw.Draw(im)
-    for c in range(2):
-        y0, col = (47, (255, 120, 20)) if c else (15, (30, 200, 255))
-        prev = None
-        for x in range(W):
-            t = x / W
-            v = (9 * math.sin(2 * math.pi * 3 * t + c) + 4 * math.sin(2 * math.pi * 11 * t + 2 * c)
-                 + 2 * math.sin(2 * math.pi * 29 * t) + random.uniform(-1.5, 1.5))
-            y = max(c * 32, min(c * 32 + 31, int(y0 - v)))
-            im.putpixel((x, y0), (30, 30, 30))
-            lo, hi = (min(prev, y), max(prev, y)) if prev is not None else (y, y)
-            d.line((x, lo, x, hi), fill=col)
-            prev = y
+    ship = [0b0001000, 0b0011100, 0b0111110, 0b1111111, 0b1001001]
+    en = [[0b0100010, 0b0011100, 0b0110110, 0b1111111, 0b1010101],
+          [0b1000001, 0b0111110, 0b1101011, 0b0111110, 0b0100010]]
+
+    def sprite(rows, x, y, col):
+        for r, bits in enumerate(rows):
+            for c in range(7):
+                if bits & (0x40 >> c) and 0 <= x + c < W and 0 <= y + r < H:
+                    im.putpixel((x + c, y + r), col)
+
+    for _ in range(W // 4):  # etoiles
+        v = random.randint(50, 150)
+        im.putpixel((random.randrange(W), random.randrange(8, H)), (v, v, v))
+    cols = max(4, min(12, (W - 14) // 10))
+    x0 = (W - cols * 10) // 2 + 1 + 3
+    dead = {(0, 2), (1, 5), (2, 0), (2, 7), (1, 8)}
+    for r, hue in enumerate((300, 35, 140)):
+        for c in range(cols):
+            if (r, c) in dead or (r, c) == (2, 4):
+                continue
+            sprite(en[(c + r) % 2], x0 + c * 10, 9 + r * 7, hsv(hue, 1, 0.9))
+    sprite(en[1], 58, 38, hsv(140, 1, 0.9))  # ennemi en pique
+    sprite(ship, 61, 57, (0, 200, 255))
+    for y in (44, 45, 46):  # tir du vaisseau
+        im.putpixel((64, y), (255, 230, 0) if y < 46 else (160, 120, 0))
+    for y in (30, 31):  # tir ennemi
+        im.putpixel((90, y), (255, 40, 30))
+    for k, (dx, dy) in enumerate(((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1))):
+        im.putpixel((25 + dx * 2, 18 + dy * 2), (255, 140, 0))  # explosion
+    d.text((1, -1), '1250', fill=(200, 200, 200), font=TINY)
+    for i in range(3):
+        d.rectangle((W - 4 - i * 5, 2, W - 2 - i * 5, 4), fill=(0, 200, 255))
+    return im
+
+
+TF = {str(i): g for i, g in enumerate(([7, 5, 5, 5, 7], [2, 6, 2, 2, 7], [7, 1, 7, 4, 7], [7, 1, 7, 1, 7], [5, 5, 7, 1, 1],
+                                        [7, 4, 7, 1, 7], [7, 4, 7, 5, 7], [7, 1, 1, 1, 1], [7, 5, 7, 5, 7], [7, 5, 7, 1, 7]))}
+TF.update({'L': [4, 4, 4, 4, 7], 'R': [6, 5, 6, 5, 5], 'P': [6, 5, 6, 4, 4], 'E': [7, 4, 6, 4, 7], 'A': [2, 5, 7, 5, 5],
+           'K': [5, 5, 6, 5, 5], 'm': [0, 6, 7, 5, 5], '.': [0, 0, 0, 0, 2]})
+
+
+def tiny(im, x, y, txt, col):
+    for ch in txt:
+        for r, bits in enumerate(TF.get(ch, [0] * 5)):
+            for c in range(3):
+                if bits & (4 >> c) and 0 <= x + c < im.width and 0 <= y + r < im.height:
+                    im.putpixel((x + c, y + r), col)
+        x += 4
+
+
+PWR_DB, PWR_POS = [-40, -30, -20, -10, -5, 0, 3], [0, .17, .40, .66, .78, .90, 1.0]
+WAT_DB, WAT_POS = [-60, -50, -40, -30, -20, -10, 0, 5], [0, .10, .25, .38, .50, .66, .85, 1.0]
+
+
+def scale_pos(dbs, pos, v):
+    if v <= dbs[0]:
+        return 0
+    for i in range(1, len(dbs)):
+        if v <= dbs[i]:
+            return pos[i - 1] + (pos[i] - pos[i - 1]) * (v - dbs[i - 1]) / (dbs[i] - dbs[i - 1])
+    return 1
+
+
+def mode_amp(style):
+    """Modes Puissance (style 0) et Watts (style 1) de vumeter.ino."""
+    A0, A1 = -0.8, 0.8
+    aw, ah = W // 2, H
+    im = Image.new('RGB', (W, H))
+    for c, needle in enumerate((0.62, 0.48)):
+        cv = Image.new('RGB', (aw, ah)); d = ImageDraw.Draw(cv)
+        r = min(ah * 1.12, (aw / 2 - 2) / math.sin(A1))
+        px, py = aw / 2, 14 + r
+
+        def pt(p, rr):
+            a = A0 + (A1 - A0) * p
+            return px + math.sin(a) * rr, py - math.cos(a) * rr
+
+        def label(p, rr, txt, col):
+            x, y = pt(p, rr)
+            w = len(txt) * 4 - 1
+            tiny(cv, max(1, min(aw - 1 - w, int(x - w / 2))), int(y - 2), txt, col)
+
+        if style == 0:
+            for y in range(ah):
+                f = y / ah
+                g = ((f - .5) / .5) ** 2 if f > .5 else 0
+                d.line((0, y, aw, y), fill=(int(2 + 25 * g), int(3 + 60 * g), int(12 + 210 * g)))
+            for v in (-35, -25, -15, -7):
+                q = scale_pos(PWR_DB, PWR_POS, v)
+                d.line((*pt(q, r * .62), *pt(q, r * .92)), fill=(90, 100, 150))
+            for v, q in zip(PWR_DB, PWR_POS):
+                d.line((*pt(q, r * .42), *pt(q, r)), fill=(225, 230, 255))
+                label(q, r + 5, str(abs(v)), (235, 240, 255))
+            ncol, lcol = (255, 40, 30), (150, 160, 200)
+        else:
+            for y in range(ah):
+                f = y / ah
+                g = (f - .6) / .4 if f > .6 else 0
+                d.line((0, y, aw, y), fill=(int(70 + 80 * g), int(150 + 60 * g), int(245 + 10 * g)))
+            navy = (8, 18, 110)
+            steps = int(r * 4)
+            for k in range(steps + 1):
+                q = k / steps
+                if any(abs(q - t) < .006 for t in WAT_POS[1:7]):
+                    continue
+                for t in range(4 if q > .85 else 3):
+                    x, y = pt(q, r - t)
+                    if 0 <= x < aw and 0 <= y < ah:
+                        cv.putpixel((int(x), int(y)), navy)
+            for i, (txt, q) in enumerate(zip(('5.0m', '50m', '100', '150', '200', '250'), (.05, .22, .40, .53, .67, .84))):
+                if i in (1, 2, 4):
+                    label(q, r + 5, txt, navy)
+            for i in range(1, 7):
+                if i % 2 == 0:
+                    label(WAT_POS[i], r - 9, str(abs(WAT_DB[i])), navy)
+            ncol, lcol = navy, navy
+        tiny(cv, aw - 5 if c else 2, ah - 6, 'R' if c else 'L', lcol)
+        d.line((px, py, *pt(needle, r + 3)), fill=ncol)
+        im.paste(cv, (c * aw, 0))
+    if style == 0:
+        tiny(im, W // 2 - 7, H - 18, 'PEAK', (200, 205, 230))
+        d = ImageDraw.Draw(im)
+        d.ellipse((W // 2 - 3, H - 11, W // 2 + 3, H - 5), outline=(40, 80, 220))
+        d.ellipse((W // 2 - 2, H - 10, W // 2 + 2, H - 6), fill=(230, 240, 255))
     return im
 
 
@@ -206,10 +298,11 @@ def font(size, bold=False):
     return ImageFont.load_default()
 
 
-MODES = [('Barres', mode_barres()), ('Spectre', bars()), ('SpectreL (barres collees)', bars(gap=0)),
-         ('Spectre St (cretes : rouge = gauche, blanc = droite, jaune = les deux)', bars(dual=True)),
+TINY = font(9)
+MODES = [('Spectre', bars()), ('Spectre St (cretes : rouge = gauche, blanc = droite, jaune = les deux)', bars(dual=True)),
          ('Miroir', bars(center=True)), ('Stereo', bars(stereo=True)),
-         ('Aiguilles', mode_aiguilles()), ('Onde', mode_onde())]
+         ('Aiguilles', mode_aiguilles()), ('Jeu (dans la demo, joue tout seul)', mode_jeu()),
+         ('Puissance (voyant PEAK au centre)', mode_amp(0)), ('Watts', mode_amp(1))]
 pw, ph = W * P + 16, H * P + 16
 M, CAP, TOP = 40, 50, 110
 img = Image.new('RGB', (2 * pw + 3 * M, TOP + 4 * (ph + CAP + M)), (18, 18, 22))
