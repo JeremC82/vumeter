@@ -102,9 +102,9 @@ text(1665, py0 + 140, 'nappe OUT -> IN', FS, ORANGE, 'mt')
 wire([(1720, hy0 + 400), (1760, hy0 + 400), (1760, py0)], GREY, 4)
 text(1770, hy0 + 420, 'nappe 16 fils', FS, GREY)
 for i, s in enumerate(['64x64 : 1 dalle 64x64', '2x64x64 : 2 dalles 64x64 -> 128x64', '128x64 : 1 dalle 128x64',
-                       '2x128x64 : 2 dalles 128x64 -> 256x64']):
+                       '2x128x64 : 2 dalles 128x64 -> 256x64', '128x128 : 2 dalles 128x64 empilees']):
     text(1430, py0 + 170 + i * 28, '- ' + s, FS)
-text(1430, py0 + 290, 'Dalles 1/32 : la broche E est obligatoire.', FS, RED)
+text(1430, py0 + 320, 'Dalles 1/32 : la broche E est obligatoire.', FS, RED)
 
 # ---------------------------------------------------------------- audio inputs
 ax0, ay0 = 40, 140

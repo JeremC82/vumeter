@@ -58,15 +58,17 @@
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 #define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
-#define VU_VERSION "1.37"
+#define VU_VERSION "1.38"
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
 
 // ---------------------------------------------------------------- reglages
-const char *LAYOUT_NAME[4] = { "64x64", "2x64x64", "128x64", "2x128x64" };
-const uint8_t LAYOUT_PANEL_W[4] = { 64, 64, 128, 128 };
-const uint8_t LAYOUT_CHAIN[4] = { 1, 2, 1, 2 };
+#define N_LAYOUTS 5
+const char *LAYOUT_NAME[N_LAYOUTS] = { "64x64", "2x64x64", "128x64", "2x128x64", "128x128" };
+const uint8_t LAYOUT_PANEL_W[N_LAYOUTS] = { 64, 64, 128, 128, 128 };
+const uint8_t LAYOUT_CHAIN[N_LAYOUTS] = { 1, 2, 1, 2, 2 };
+const bool LAYOUT_STACKED[N_LAYOUTS] = { false, false, false, false, true };  // 128x128 : 2 dalles l'une sous l'autre
 // (nouveaux modes ajoutes a la fin : les numeros deja enregistres restent valables)
 enum Mode : uint8_t { M_AUTO, M_SPECTRUM, M_MIRROR, M_NEEDLES, M_STEREO, M_SPECTRUM_ST, M_GAME, M_POWER, M_WATTS, M_COUNT };
 const char *MODE_NAME[M_COUNT] = { "Auto", "Spectre", "Miroir", "Aiguilles", "Stereo", "Spectre St", "Jeu", "Puissance", "Watts" };
@@ -75,8 +77,31 @@ const uint8_t BRIGHT[5] = { 20, 45, 80, 140, 220 };
 
 Preferences prefs;
 MatrixPanel_I2S_DMA *dma = nullptr;
+// 2 dalles 128x64 chainees et posees l'une sous l'autre (meme sens, la 1re reliee a l'ESP32 en haut) :
+// la chaine fait 256x64, on la presente comme un ecran 128x128.
+class StackedPanels : public Adafruit_GFX {
+ public:
+  StackedPanels(MatrixPanel_I2S_DMA *d) : Adafruit_GFX(128, 128), m(d) {}
+  void drawPixel(int16_t x, int16_t y, uint16_t c) override {
+    if (x < 0 || x >= 128 || y < 0 || y >= 128) return;
+    if (y < 64) m->drawPixel(x, y, c);
+    else m->drawPixel(x + 128, y - 64, c);
+  }
+  void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c) override {
+    int x0 = max(0, (int)x), x1 = min(128, x + w), y0 = max(0, (int)y), y1 = min(128, y + h);
+    if (x1 <= x0 || y1 <= y0) return;
+    if (y0 < 64) m->fillRect(x0, y0, x1 - x0, min(y1, 64) - y0, c);
+    if (y1 > 64) m->fillRect(x0 + 128, max(y0, 64) - 64, x1 - x0, y1 - max(y0, 64), c);
+  }
+  void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t c) override { fillRect(x, y, w, 1, c); }
+  void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t c) override { fillRect(x, y, 1, h, c); }
+  void fillScreen(uint16_t c) override { m->fillScreen(c); }
+ private:
+  MatrixPanel_I2S_DMA *m;
+};
+Adafruit_GFX *gfx = nullptr;  // ecran utilise pour dessiner (la dalle, ou les 2 dalles empilees)
 int W = 64;               // largeur de l'ecran (64, 128 ou 256)
-const int H = 64;
+int H = 64;  // 128 avec 2 dalles empilees
 uint8_t layout = 0, mode = M_AUTO, brightIdx = 2;
 
 // ---------------------------------------------------------------- audio partage (tache audio -> affichage)
@@ -362,15 +387,15 @@ uint16_t barCellColor(const Bar &br, int seg, bool lit) {
 }
 void barFillSeg(const Bar &br, int seg, uint16_t col) {
   if (br.center) {  // depuis le milieu vers le haut et vers le bas
-    dma->fillRect(br.x, H / 2 - 2 - seg * SEG, br.w, 1, col);
-    dma->fillRect(br.x, H / 2 + 1 + seg * SEG, br.w, 1, col);
+    gfx->fillRect(br.x, H / 2 - 2 - seg * SEG, br.w, 1, col);
+    gfx->fillRect(br.x, H / 2 + 1 + seg * SEG, br.w, 1, col);
   } else {
-    dma->fillRect(br.x, H - 1 - seg * SEG, br.w, 1, col);
+    gfx->fillRect(br.x, H - 1 - seg * SEG, br.w, 1, col);
   }
 }
 void barDrawSeg(const Bar &br, int seg, bool lit) { barFillSeg(br, seg, barCellColor(br, seg, lit)); }
 void barsFullDraw() {
-  dma->fillScreen(0);
+  gfx->fillScreen(0);
   for (int i = 0; i < nBars; i++) {
     barList[i].shown = 0;
     barList[i].cap = barList[i].cap2 = -1;
@@ -454,8 +479,8 @@ float vuPos(float dbVU) {  // loi des vu-metres : -20 VU a gauche, +3 VU a droit
   return constrain((lin - lo) / (hi - lo), 0.0f, 1.0f);
 }
 void needlesSetup() {
-  dma->fillScreen(0);
-  if (W >= 128) { dialW = W / 2; dialH = H; } else { dialW = W; dialH = H / 2; }
+  gfx->fillScreen(0);
+  if (W >= 128 && H <= 64) { dialW = W / 2; dialH = H; } else { dialW = W; dialH = H / 2; }
   if (dialCv) delete dialCv;
   dialCv = new GFXcanvas16(dialW, dialH);
 }
@@ -485,8 +510,8 @@ void drawDial(int c) {
   cv.print(c ? "R" : "L");
   float a = A0 + (A1 - A0) * needle[c];
   cv.drawLine(px, py, px + sinf(a) * (r - 1), py - cosf(a) * (r - 1), ink);  // aiguille fine : 1 pixel
-  int ox = W >= 128 ? c * dialW : 0, oy = W >= 128 ? 0 : c * dialH;
-  dma->drawRGBBitmap(ox, oy, cv.getBuffer(), dialW, dialH);
+  int ox = dialW < W ? c * dialW : 0, oy = dialW < W ? 0 : c * dialH;
+  gfx->drawRGBBitmap(ox, oy, cv.getBuffer(), dialW, dialH);
 }
 void needlesUpdate() {
   if (!dialCv || !dialCv->getBuffer()) return;
@@ -505,10 +530,13 @@ void needlesUpdate() {
 //                       aiguille rouge, voyant PEAK blanc au centre.
 // Watts (style 1)     : cadran bleu clair, bande d'echelle bleu marine en arc (watts au-dessus,
 //                       decibels en dessous), aiguille bleu marine.
-// Le fond de chaque cadran est dessine une fois ; a chaque image on le recopie et on ajoute l'aiguille.
-GFXcanvas16 *ampBg = nullptr, *ampCv = nullptr;
+// Le fond du cadran est dessine une fois dans une image en memoire puis affiche ; ensuite seule
+// l'aiguille bouge : ses anciens pixels sont repris dans l'image du fond (rapide, sans scintillement).
+GFXcanvas16 *ampBg = nullptr;
 int ampW = 0, ampH = 0, ampStyle = 0, peakHold = 0;
 float ampPx = 0, ampPy = 0, ampR = 0;
+int ampLast[2][4];  // derniere aiguille dessinee (x0, y0, x1, y1) par cadran
+bool ampHasLast[2] = { false, false };
 const float AMP_A0 = -0.8f, AMP_A1 = 0.8f;  // angles extremes de l'aiguille (radians)
 // echelles : dB (0 = niveau nominal) -> position 0..1 sur le cadran
 const int8_t PWR_DB[7] = { -40, -30, -20, -10, -5, 0, 3 };
@@ -546,10 +574,10 @@ void tinyText(Adafruit_GFX &g, int x, int y, const char *s, uint16_t col) {
         if (gl[r] & (4 >> c)) g.drawPixel(x + c, y + r, col);
   }
 }
-// texte centre sur un point de l'arc (rayon rr, position p de 0 a 1)
+// texte centre sur un point de l'arc (rayon rr, position p de 0 a 1), garde dans le cadran
 void ampLabel(GFXcanvas16 &cv, float p, float rr, const char *s, uint16_t col) {
   float a = AMP_A0 + (AMP_A1 - AMP_A0) * p;
-  int x = constrain((int)(ampPx + sinf(a) * rr - tinyWidth(s) / 2.0f), 1, ampW - 1 - tinyWidth(s)), y = ampPy - cosf(a) * rr - 2;  // reste dans le cadran
+  int x = constrain((int)(ampPx + sinf(a) * rr - tinyWidth(s) / 2.0f), 1, ampW - 1 - tinyWidth(s)), y = ampPy - cosf(a) * rr - 2;
   tinyText(cv, x, y, s, col);
 }
 void ampSpoke(GFXcanvas16 &cv, float p, float r0, float r1, uint16_t col) {
@@ -558,16 +586,35 @@ void ampSpoke(GFXcanvas16 &cv, float p, float r0, float r1, uint16_t col) {
 }
 void ampFree() {
   if (ampBg) { delete ampBg; ampBg = nullptr; }
-  if (ampCv) { delete ampCv; ampCv = nullptr; }
+}
+bool ampSideBySide() { return W >= 128 && H <= 64; }  // sinon les deux cadrans sont l'un sous l'autre
+int ampOx(int c) { return ampSideBySide() ? c * ampW : 0; }
+int ampOy(int c) { return ampSideBySide() ? 0 : c * ampH; }
+// trace (col >= 0) ou efface (col < 0 : pixels repris du fond) une aiguille, pixel par pixel
+void ampLine(int c, int x0, int y0, int x1, int y1, int32_t col) {
+  uint16_t *bg = ampBg->getBuffer();
+  int ox = ampOx(c), oy = ampOy(c);
+  int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1, dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1, err = dx + dy;
+  for (;;) {
+    if (x0 >= 0 && x0 < ampW && y0 >= 0 && y0 < ampH) gfx->drawPixel(ox + x0, oy + y0, col >= 0 ? (uint16_t)col : bg[y0 * ampW + x0]);
+    if (x0 == x1 && y0 == y1) break;
+    int e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
 }
 void ampSetup(int style) {
-  dma->fillScreen(0);
+  gfx->fillScreen(0);
   ampStyle = style;
-  if (W >= 128) { ampW = W / 2; ampH = H; } else { ampW = W; ampH = H / 2; }  // 64x64 : cadrans l'un sur l'autre
+  if (ampSideBySide()) { ampW = W / 2; ampH = H; } else { ampW = W; ampH = H / 2; }
   ampFree();
   ampBg = new GFXcanvas16(ampW, ampH);
-  ampCv = new GFXcanvas16(ampW, ampH);
-  if (!ampBg->getBuffer() || !ampCv->getBuffer()) { ampFree(); return; }
+  if (!ampBg->getBuffer()) {
+    ampFree();
+    Serial.printf("Memoire insuffisante pour le cadran %dx%d (libre : %u octets)\n", ampW, ampH, ESP.getFreeHeap());
+    return;
+  }
+  ampHasLast[0] = ampHasLast[1] = false;
   bool big = ampH >= 48;  // place pour les graduations chiffrees
   ampR = min(ampH * 1.12f, (ampW / 2 - 2) / sinf(AMP_A1));
   ampPx = ampW / 2.0f;
@@ -620,33 +667,34 @@ void ampSetup(int style) {
         }
     }
   }
+  for (int c = 0; c < 2; c++) gfx->drawRGBBitmap(ampOx(c), ampOy(c), ampBg->getBuffer(), ampW, ampH);
+  if (style == 0 && ampSideBySide()) tinyText(*gfx, W / 2 - 7, H - 18, "PEAK", rgb(200, 205, 230));
 }
 void ampUpdate() {
-  if (!ampCv) return;
+  if (!ampBg) return;
   uint16_t needleCol = ampStyle ? rgb(8, 18, 110) : rgb(255, 40, 30);
   for (int c = 0; c < 2; c++) {
     float target = view.rmsDb[c] < GATE_DB ? 0 : ampPos(view.rmsDb[c] - (agcRef - 8));
     needleV[c] += (target - needle[c]) * 0.09f;  // aiguille avec inertie
     needleV[c] *= 0.72f;
     needle[c] = constrain(needle[c] + needleV[c], -0.02f, 1.02f);
-    memcpy(ampCv->getBuffer(), ampBg->getBuffer(), ampW * ampH * 2);
-    tinyText(*ampCv, c ? ampW - 5 : 2, ampH - 6, c ? "R" : "L", ampStyle ? rgb(8, 18, 110) : rgb(150, 160, 200));  // L a gauche, R a droite
     float a = AMP_A0 + (AMP_A1 - AMP_A0) * needle[c];
-    ampCv->drawLine(ampPx, ampPy, ampPx + sinf(a) * (ampR + 3), ampPy - cosf(a) * (ampR + 3), needleCol);
-    int ox = W >= 128 ? c * ampW : 0, oy = W >= 128 ? 0 : c * ampH;
-    dma->drawRGBBitmap(ox, oy, ampCv->getBuffer(), ampW, ampH);
+    int x0 = ampPx, y0 = ampPy, x1 = ampPx + sinf(a) * (ampR + 3), y1 = ampPy - cosf(a) * (ampR + 3);
+    int *last = ampLast[c];
+    if (ampHasLast[c] && last[2] == x1 && last[3] == y1) continue;  // aiguille immobile
+    if (ampHasLast[c]) ampLine(c, last[0], last[1], last[2], last[3], -1);  // efface l'ancienne
+    ampLine(c, x0, y0, x1, y1, needleCol);
+    last[0] = x0; last[1] = y0; last[2] = x1; last[3] = y1;
+    ampHasLast[c] = true;
+    tinyText(*gfx, ampOx(c) + (c ? ampW - 5 : 2), ampOy(c) + ampH - 6, c ? "R" : "L", ampStyle ? rgb(8, 18, 110) : rgb(150, 160, 200));
   }
   if (ampStyle == 0) {  // voyant PEAK
     if (max(view.peakDb[0], view.peakDb[1]) > agcRef + 1) peakHold = 12;
     else if (peakHold > 0) peakHold--;
     uint16_t led = peakHold ? rgb(230, 240, 255) : rgb(25, 30, 50);
-    if (W >= 128) {
-      tinyText(*dma, W / 2 - 7, H - 18, "PEAK", rgb(200, 205, 230));
-      if (peakHold) dma->drawCircle(W / 2, H - 8, 3, rgb(40, 80, 220));
-      dma->fillCircle(W / 2, H - 8, 2, led);
-    } else {
-      dma->fillCircle(W - 4, H / 2, 1, led);
-    }
+    int lx = ampSideBySide() ? W / 2 : W - 6, ly = ampSideBySide() ? H - 8 : H / 2;
+    gfx->drawCircle(lx, ly, 3, peakHold ? rgb(40, 80, 220) : rgb(16, 37, 130));
+    gfx->fillCircle(lx, ly, 2, led);
   }
 }
 
@@ -654,14 +702,15 @@ void ampUpdate() {
 // Vaisseau en bas pilote automatiquement, formation d'ennemis qui oscille, ennemis qui piquent.
 // Reagit a la musique : ennemis plus lumineux sur les basses, etoiles plus rapides quand le son monte.
 // Dessin sans scintillement : seuls les rectangles dessines a l'image precedente sont effaces.
-#define G_MAXE 36
+#define G_MAXE 60
 #define G_SHOTS 3
 #define G_BOMBS 8
 #define G_BOOMS 8
 #define G_STARS 48
 #define G_RECTS 160
-const int G_PY = 57;  // ligne du haut du vaisseau
-const int G_ROWS = 3;
+int gPY = 57;   // ligne du haut du vaisseau (H - 7)
+int gRows = 3;  // 5 rangees sur 128x128
+#define G_MAXROWS 5
 struct GEnemy { float x, y, vx, vy; int8_t row, col; uint8_t state; bool alive; };  // state : 0 rang, 1 pique, 2 retour
 struct GDot { float x, y; bool on; };
 struct GBoom { int16_t x, y; uint8_t t; };
@@ -679,13 +728,13 @@ float gPx = 0, gSway = 0;
 const uint8_t SPR_SHIP[5] = { 0b0001000, 0b0011100, 0b0111110, 0b1111111, 0b1001001 };
 const uint8_t SPR_EN[2][5] = { { 0b0100010, 0b0011100, 0b0110110, 0b1111111, 0b1010101 },
                                { 0b1000001, 0b0111110, 0b1101011, 0b0111110, 0b0100010 } };
-const float G_HUE[G_ROWS] = { 300, 35, 140 };  // magenta, orange, vert
+const float G_HUE[G_MAXROWS] = { 300, 35, 140, 190, 55 };  // magenta, orange, vert, cyan, jaune
 
 void gMark(int x, int y, int w, int h) {
   if (gNOld < G_RECTS) gOld[gNOld++] = { (int16_t)x, (int16_t)y, (uint8_t)w, (uint8_t)h };
 }
 void gPix(int x, int y, uint16_t c) {
-  if (x >= 0 && x < W && y >= 0 && y < H) dma->drawPixel(x, y, c);
+  if (x >= 0 && x < W && y >= 0 && y < H) gfx->drawPixel(x, y, c);
   gMark(x, y, 1, 1);
 }
 void gSprite(const uint8_t *rows, int h, int x, int y, uint16_t col) {
@@ -693,7 +742,7 @@ void gSprite(const uint8_t *rows, int h, int x, int y, uint16_t col) {
     for (int c = 0; c < 7; c++)
       if (rows[r] & (0x40 >> c)) {
         int px = x + c, py = y + r;
-        if (px >= 0 && px < W && py >= 0 && py < H) dma->drawPixel(px, py, col);
+        if (px >= 0 && px < W && py >= 0 && py < H) gfx->drawPixel(px, py, col);
       }
   gMark(x, y, 7, h);
 }
@@ -706,12 +755,12 @@ void gBoomAt(int x, int y) {
 void gNewWave() {
   gCols = constrain((W - 14) / 10, 4, 12);
   gNE = 0;
-  for (int r = 0; r < G_ROWS; r++)
+  for (int r = 0; r < gRows; r++)
     for (int c = 0; c < gCols && gNE < G_MAXE; c++) {
       GEnemy &e = gEn[gNE++];
       e = {};
       e.row = r; e.col = c; e.alive = true;
-      e.x = gSlotX(c); e.y = -8 - 6 * (G_ROWS - r);  // arrivent du haut
+      e.x = gSlotX(c); e.y = -8 - 6 * (gRows - r);  // arrivent du haut
       e.state = 2;
     }
   gWave++;
@@ -725,15 +774,17 @@ void gReset() {
   gNewWave();
 }
 void gameSetup() {
-  dma->fillScreen(0);
+  gfx->fillScreen(0);
   gNOld = 0;
+  gPY = H - 7;
+  gRows = H >= 128 ? 5 : 3;
   if (gLives <= 0 && gDead == 0) gReset();
   gNStar = min(G_STARS, W / 4);
   for (int i = 0; i < gNStar; i++) gStar[i] = { (int16_t)random(W), (float)random(8, H), 0.2f + random(100) / 120.0f };
   gLastStep = millis();
 }
 void gHitPlayer() {
-  gBoomAt(gPx + 3, G_PY + 2);
+  gBoomAt(gPx + 3, gPY + 2);
   gLives--;
   gDead = gLives > 0 ? 50 : 120;  // pause avant le vaisseau suivant (plus longue apres GAME OVER)
 }
@@ -775,11 +826,11 @@ void gameStep() {
     }
     // tirs ennemis
     int chance = e.state == 1 ? 20 : 2 + gWave;
-    if (gDead == 0 && e.y > 0 && e.y < 40 && random(1000) < chance)
+    if (gDead == 0 && e.y > 0 && e.y < H * 0.6f && random(1000) < chance)
       for (auto &b : gBomb)
         if (!b.on) { b = { e.x + 3, e.y + 5, true }; break; }
     // collision avec le vaisseau
-    if (gDead == 0 && e.state == 1 && e.x + 6 >= gPx && e.x <= gPx + 6 && e.y + 4 >= G_PY && e.y <= G_PY + 4) {
+    if (gDead == 0 && e.state == 1 && e.x + 6 >= gPx && e.x <= gPx + 6 && e.y + 4 >= gPY && e.y <= gPY + 4) {
       e.alive = false;
       gBoomAt(e.x + 3, e.y + 2);
       gHitPlayer();
@@ -790,7 +841,7 @@ void gameStep() {
     float target = gPx, cx = gPx + 3;
     bool dodge = false;
     for (auto &b : gBomb)
-      if (b.on && b.y > G_PY - 22 && fabsf(b.x - cx) < 5) { target = b.x < cx ? gPx + 6 : gPx - 6; dodge = true; break; }
+      if (b.on && b.y > gPY - 22 && fabsf(b.x - cx) < 5) { target = b.x < cx ? gPx + 6 : gPx - 6; dodge = true; break; }
     if (!dodge) {
       float best = 1e9;
       for (int i = 0; i < gNE; i++) {
@@ -808,7 +859,7 @@ void gameStep() {
       for (int i = 0; i < gNE; i++)
         if (gEn[i].alive && gEn[i].y > 0 && fabsf(gEn[i].x - gPx) < 4) {
           for (auto &s : gShot)
-            if (!s.on) { s = { gPx + 3, (float)G_PY - 3, true }; gCool = 7; break; }
+            if (!s.on) { s = { gPx + 3, (float)gPY - 3, true }; gCool = 7; break; }
           break;
         }
   } else if (--gDead == 0 && gLives <= 0) {
@@ -835,7 +886,7 @@ void gameStep() {
     if (!b.on) continue;
     b.y += 1.3f + 0.1f * gWave;
     if (b.y >= H) { b.on = false; continue; }
-    if (gDead == 0 && b.x >= gPx && b.x <= gPx + 6 && b.y + 1 >= G_PY && b.y <= G_PY + 4) { b.on = false; gHitPlayer(); }
+    if (gDead == 0 && b.x >= gPx && b.x <= gPx + 6 && b.y + 1 >= gPY && b.y <= gPY + 4) { b.on = false; gHitPlayer(); }
   }
   for (auto &b : gBoom)
     if (b.t) b.t = b.t >= 9 ? 0 : b.t + 1;
@@ -847,7 +898,7 @@ void gameDraw() {
   for (int i = 0; i < gNOld; i++) {  // efface l'image precedente
     GRect &r = gOld[i];
     int x0 = max(0, (int)r.x), y0 = max(0, (int)r.y), x1 = min(W, r.x + r.w), y1 = min(H, r.y + r.h);
-    if (x1 > x0 && y1 > y0) dma->fillRect(x0, y0, x1 - x0, y1 - y0, 0);
+    if (x1 > x0 && y1 > y0) gfx->fillRect(x0, y0, x1 - x0, y1 - y0, 0);
   }
   gNOld = 0;
   for (int i = 0; i < gNStar; i++) {
@@ -873,24 +924,24 @@ void gameDraw() {
     uint16_t c = b.t < 4 ? rgb(255, 255, 160) : b.t < 7 ? rgb(255, 140, 0) : rgb(140, 30, 0);
     for (int k = 0; k < 8; k++) gPix(b.x + DX[k] * b.t / 2, b.y + DY[k] * b.t / 2, c);
   }
-  if (gDead == 0) gSprite(SPR_SHIP, 5, (int)gPx, G_PY, rgb(0, 200, 255));
+  if (gDead == 0) gSprite(SPR_SHIP, 5, (int)gPx, gPY, rgb(0, 200, 255));
   // score et vies
-  dma->setFont(NULL);
-  dma->setTextSize(1);
-  dma->setTextColor(rgb(200, 200, 200));
+  gfx->setFont(NULL);
+  gfx->setTextSize(1);
+  gfx->setTextColor(rgb(200, 200, 200));
   char sc[12];
   snprintf(sc, sizeof(sc), "%lu", (unsigned long)gScore);
-  dma->setCursor(1, 0);
-  dma->print(sc);
+  gfx->setCursor(1, 0);
+  gfx->print(sc);
   gMark(1, 0, strlen(sc) * 6, 8);
   for (int i = 0; i < gLives; i++) {
-    dma->fillRect(W - 4 - i * 5, 2, 3, 3, rgb(0, 200, 255));
+    gfx->fillRect(W - 4 - i * 5, 2, 3, 3, rgb(0, 200, 255));
     gMark(W - 4 - i * 5, 2, 3, 3);
   }
   if (gLives <= 0 && gDead > 0) {
-    dma->setTextColor(rgb(255, 60, 40));
-    dma->setCursor(W / 2 - 27, 28);
-    dma->print("GAME OVER");
+    gfx->setTextColor(rgb(255, 60, 40));
+    gfx->setCursor(W / 2 - 27, 28);
+    gfx->print("GAME OVER");
     gMark(W / 2 - 27, 28, 54, 8);
   }
 }
@@ -941,13 +992,13 @@ void drawOverlay() {
   static bool shown = false;
   if (millis() < overlayUntil) {
     int w = strlen(overlay) * 6 + 3;
-    dma->fillRect(0, 0, w, 10, 0);
-    dma->drawRect(0, 0, w, 10, rgb(80, 80, 80));
-    dma->setFont(NULL);
-    dma->setTextSize(1);
-    dma->setTextColor(rgb(255, 255, 255));
-    dma->setCursor(2, 1);
-    dma->print(overlay);
+    gfx->fillRect(0, 0, w, 10, 0);
+    gfx->drawRect(0, 0, w, 10, rgb(80, 80, 80));
+    gfx->setFont(NULL);
+    gfx->setTextSize(1);
+    gfx->setTextColor(rgb(255, 255, 255));
+    gfx->setCursor(2, 1);
+    gfx->print(overlay);
     shown = true;
   } else if (shown) {  // message parti : ecran redessine
     shown = false;
@@ -991,7 +1042,7 @@ void handleButton() {
   if (pressed && !down) { down = true; downAt = now; layoutShown = false; }
   if (pressed && down && now - downAt > 5000 && !layoutShown) {  // 5 s : dalle suivante
     layoutShown = true;
-    applyLayout((layout + 1) % 4);
+    applyLayout((layout + 1) % N_LAYOUTS);
   }
   if (!pressed && down) {
     down = false;
@@ -1015,7 +1066,7 @@ void handleLayoutButton() {
   if (pressed && !down && now - pressAt > 60) {  // nouvel appui (anti-rebond)
     down = true;
     pressAt = now;
-    pending = ((pending < 0 ? layout : pending) + 1) % 4;
+    pending = ((pending < 0 ? layout : pending) + 1) % N_LAYOUTS;
     changedAt = now;
     char m[24];
     snprintf(m, sizeof(m), "Dalle %s", LAYOUT_NAME[pending]);
@@ -1035,11 +1086,11 @@ void printMenu() {
   bool jumper = digitalRead(DEMO_PIN) == LOW;
   Serial.println();
   Serial.println("===== VU-metre v" VU_VERSION " =====");
-  Serial.printf("Dalle : %s   Mode : %s   Luminosite : %d/5\n", LAYOUT_NAME[layout], MODE_NAME[mode], brightIdx + 1);
+  Serial.printf("Dalle : %s   Mode : %s   Luminosite : %d/5   Memoire libre : %u\n", LAYOUT_NAME[layout], MODE_NAME[mode], brightIdx + 1, ESP.getFreeHeap());
   Serial.printf("Demo  : %s%s\n", demoOn ? "en marche" : "arretee",
                 jumper ? " (cavalier GPIO18 en place)" : demoMenu ? " (lancee depuis ce menu)" : "");
   Serial.println("-------------------------------");
-  for (int i = 0; i < 4; i++) Serial.printf("  %d : dalle %s%s\n", i + 1, LAYOUT_NAME[i], i == layout ? "  <- actuelle" : "");
+  for (int i = 0; i < N_LAYOUTS; i++) Serial.printf("  %d : dalle %s%s\n", i + 1, LAYOUT_NAME[i], i == layout ? "  <- actuelle" : "");
   Serial.println("  d : demo marche / arret");
   Serial.println("  m : mode d'affichage suivant");
   Serial.println("  l : luminosite suivante");
@@ -1049,7 +1100,7 @@ void printMenu() {
 void handleSerial() {
   while (Serial.available()) {
     char c = Serial.read();
-    if (c >= '1' && c <= '4') {
+    if (c >= '1' && c < '1' + N_LAYOUTS) {
       uint8_t l = c - '1';
       if (l == layout) Serial.printf("Dalle %s deja choisie.\n", LAYOUT_NAME[l]);
       else applyLayout(l);
@@ -1100,7 +1151,7 @@ void setup() {
   prefs.begin("vu", false);
   demoMenu = prefs.getBool("demo", false);
   demoOn = digitalRead(DEMO_PIN) == LOW || demoMenu;
-  layout = prefs.getUChar("layout", 0) % 4;
+  layout = prefs.getUChar("layout", 0) % N_LAYOUTS;
   mode = prefs.getUChar("mode", M_AUTO) % M_COUNT;
   brightIdx = prefs.getUChar("bright", 2) % 5;
 
@@ -1128,8 +1179,10 @@ void setup() {
     for (;;) delay(1000);
   }
   W = LAYOUT_PANEL_W[layout] * LAYOUT_CHAIN[layout];
+  gfx = dma;
+  if (LAYOUT_STACKED[layout]) { W = 128; H = 128; gfx = new StackedPanels(dma); }
   dma->setBrightness8(BRIGHT[brightIdx]);
-  dma->fillScreen(0);
+  gfx->fillScreen(0);
   char m[24];
   snprintf(m, sizeof(m), "%s%s", LAYOUT_NAME[layout], demoOn ? " Demo" : "");
   showMessage(m);
