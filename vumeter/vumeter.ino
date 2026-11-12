@@ -25,6 +25,9 @@
 /*  Mode demo : cavalier permanent entre GPIO 18 et la masse. Le son est alors une petite        */
 /*  musique synthetisee (batterie, basse, arpege stereo) a la place de l'entree audio.           */
 /*  Le cavalier peut etre mis ou retire a tout moment.                                           */
+/*                                                                                                */
+/*  Moniteur serie (115200 bauds) : petit menu (taper ?) pour choisir la dalle (1-4), lancer ou   */
+/*  arreter la demo (d, memorise), changer de mode (m) ou de luminosite (l).                     */
 /**************************************************************************************************/
 #include <Arduino.h>
 #include <Preferences.h>
@@ -55,8 +58,7 @@
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 #define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
-#define VU_VERSION "1.33"
-// VU_DEMO_FORCE (option de compilation) : demo toujours active, sans cavalier
+#define VU_VERSION "1.34"
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -620,6 +622,33 @@ void drawOverlay() {
   }
 }
 
+// ---------------------------------------------------------------- reglages communs (bouton et moniteur serie)
+void nextMode() {
+  mode = (mode + 1) % M_COUNT;
+  prefs.putUChar("mode", mode);
+  showMessage(MODE_NAME[mode]);
+  autoSince = millis();
+}
+void nextBright() {
+  brightIdx = (brightIdx + 1) % 5;
+  dma->setBrightness8(BRIGHT[brightIdx]);
+  prefs.putUChar("bright", brightIdx);
+  char m[24];
+  snprintf(m, sizeof(m), "Lum %d/5", brightIdx + 1);
+  showMessage(m);
+}
+void applyLayout(uint8_t l) {  // enregistre la dalle et redemarre
+  char m[24];
+  snprintf(m, sizeof(m), "Dalle %s", LAYOUT_NAME[l]);
+  showMessage(m);
+  drawOverlay();
+  prefs.putUChar("layout", l);
+  Serial.printf("Dalle %s enregistree, redemarrage...\n", LAYOUT_NAME[l]);
+  Serial.flush();
+  delay(1500);
+  ESP.restart();
+}
+
 // ---------------------------------------------------------------- bouton
 void handleButton() {
   static uint32_t downAt = 0;
@@ -629,32 +658,14 @@ void handleButton() {
   if (pressed && !down) { down = true; downAt = now; layoutShown = false; }
   if (pressed && down && now - downAt > 5000 && !layoutShown) {  // 5 s : dalle suivante
     layoutShown = true;
-    layout = (layout + 1) % 4;
-    prefs.putUChar("layout", layout);
-    char m[24];
-    snprintf(m, sizeof(m), "Dalle %s", LAYOUT_NAME[layout]);
-    showMessage(m);
-    drawOverlay();
-    delay(1500);
-    ESP.restart();
+    applyLayout((layout + 1) % 4);
   }
   if (!pressed && down) {
     down = false;
     uint32_t d = now - downAt;
     if (d < 40) return;  // rebond
-    if (d < 1000) {      // court : mode suivant
-      mode = (mode + 1) % M_COUNT;
-      prefs.putUChar("mode", mode);
-      showMessage(MODE_NAME[mode]);
-      autoSince = now;
-    } else if (d < 5000) {  // 1 a 3 s : luminosite
-      brightIdx = (brightIdx + 1) % 5;
-      dma->setBrightness8(BRIGHT[brightIdx]);
-      prefs.putUChar("bright", brightIdx);
-      char m[24];
-      snprintf(m, sizeof(m), "Lum %d/5", brightIdx + 1);
-      showMessage(m);
-    }
+    if (d < 1000) nextMode();          // court : mode suivant
+    else if (d < 5000) nextBright();   // 1 a 5 s : luminosite
   }
 }
 
@@ -680,12 +691,51 @@ void handleLayoutButton() {
     down = false;
   }
   if (pending >= 0 && !down && now - changedAt > 2000) {
-    if (pending != layout) {
-      prefs.putUChar("layout", pending);
-      delay(50);
-      ESP.restart();
-    }
+    if (pending != layout) applyLayout(pending);
     pending = -1;  // revenu sur la dalle actuelle : rien a faire
+  }
+}
+
+// ---------------------------------------------------------------- menu du moniteur serie (115200 bauds)
+bool demoMenu = false;  // demo lancee depuis le menu (memorisee), en plus du cavalier GPIO 18
+void printMenu() {
+  bool jumper = digitalRead(DEMO_PIN) == LOW;
+  Serial.println();
+  Serial.println("===== VU-metre v" VU_VERSION " =====");
+  Serial.printf("Dalle : %s   Mode : %s   Luminosite : %d/5\n", LAYOUT_NAME[layout], MODE_NAME[mode], brightIdx + 1);
+  Serial.printf("Demo  : %s%s\n", demoOn ? "en marche" : "arretee",
+                jumper ? " (cavalier GPIO18 en place)" : demoMenu ? " (lancee depuis ce menu)" : "");
+  Serial.println("-------------------------------");
+  for (int i = 0; i < 4; i++) Serial.printf("  %d : dalle %s%s\n", i + 1, LAYOUT_NAME[i], i == layout ? "  <- actuelle" : "");
+  Serial.println("  d : demo marche / arret");
+  Serial.println("  m : mode d'affichage suivant");
+  Serial.println("  l : luminosite suivante");
+  Serial.println("  ? : afficher ce menu");
+  Serial.println("Tapez une touche puis Entree.");
+}
+void handleSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c >= '1' && c <= '4') {
+      uint8_t l = c - '1';
+      if (l == layout) Serial.printf("Dalle %s deja choisie.\n", LAYOUT_NAME[l]);
+      else applyLayout(l);
+    } else if (c == 'd' || c == 'D') {
+      demoMenu = !demoMenu;
+      prefs.putBool("demo", demoMenu);
+      Serial.printf("Demo %s (memorise)\n", demoMenu ? "lancee" : "arretee");
+      if (!demoMenu && digitalRead(DEMO_PIN) == LOW) Serial.println("Attention : le cavalier GPIO18 garde la demo en marche.");
+    } else if (c == 'm' || c == 'M') {
+      nextMode();
+      Serial.printf("Mode : %s\n", MODE_NAME[mode]);
+    } else if (c == 'l' || c == 'L') {
+      nextBright();
+      Serial.printf("Luminosite : %d/5\n", brightIdx + 1);
+    } else if (c == '?' || c == 'h' || c == 'H') {
+      printMenu();
+    } else if (c > ' ') {
+      Serial.printf("Touche '%c' inconnue, tapez ? pour le menu.\n", c);
+    }
   }
 }
 
@@ -695,11 +745,7 @@ void handleDemoPin() {
   static uint8_t same = 0;
   if (millis() - last < 20) return;
   last = millis();
-#ifdef VU_DEMO_FORCE
-  bool want = true;
-#else
-  bool want = digitalRead(DEMO_PIN) == LOW;
-#endif
+  bool want = digitalRead(DEMO_PIN) == LOW || demoMenu;
   if (want == demoOn) { same = 0; return; }
   if (++same < 5) return;
   same = 0;
@@ -718,12 +764,9 @@ void setup() {
   pinMode(DEMO_PIN, INPUT_PULLUP);
   pinMode(LAYOUT_BTN_PIN, INPUT);  // pas de rappel interne sur GPIO 34
   delay(5);
-#ifdef VU_DEMO_FORCE
-  demoOn = true;
-#else
-  demoOn = digitalRead(DEMO_PIN) == LOW;
-#endif
   prefs.begin("vu", false);
+  demoMenu = prefs.getBool("demo", false);
+  demoOn = digitalRead(DEMO_PIN) == LOW || demoMenu;
   layout = prefs.getUChar("layout", 0) % 4;
   mode = prefs.getUChar("mode", M_AUTO) % M_COUNT;
   brightIdx = prefs.getUChar("bright", 2) % 5;
@@ -762,6 +805,7 @@ void setup() {
   adcInit();
   xTaskCreatePinnedToCore(audioTask, "audio", 6144, NULL, 3, NULL, 0);
   autoSince = millis();
+  printMenu();
 }
 
 void loop() {
@@ -769,6 +813,7 @@ void loop() {
   handleButton();
   handleDemoPin();
   handleLayoutButton();
+  handleSerial();
   uint8_t want = mode;
   if (mode == M_AUTO) {  // Auto : change de mode toutes les 20 s
     if (millis() - autoSince > AUTO_SECONDS * 1000UL) {

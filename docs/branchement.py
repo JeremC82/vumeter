@@ -48,14 +48,13 @@ text(W // 2, 72, 'ESP32 DevKit (38 broches) - meme brochage dalle que l\'horloge
 # ---------------------------------------------------------------- ESP32
 ex0, ey0, ex1, ey1 = 760, 140, 1080, 900
 box(ex0, ey0, ex1, ey1, 'ESP32 DevKit', (236, 242, 250))
-LEFT = [('3V3', '3,3 V'), ('GND', 'masse'), ('GPIO36', 'audio G (VP)'), ('GPIO39', 'audio D (VN)'), ('GPIO33', 'bouton'),
-        ('GPIO34', 'bouton dalle'), ('GPIO18', 'demo'), ('5V / VIN', '5 V'), ('GND', 'masse')]
+LEFT = [('3V3', '3,3 V'), ('GND', 'masse'), ('GPIO36', 'audio G (VP)'), ('GPIO39', 'audio D (VN)'), ('GPIO18', 'demo'), ('5V / VIN', '5 V'), ('GND', 'masse')]
 RIGHT = [('GPIO25', 'R1'), ('GPIO26', 'G1'), ('GPIO27', 'B1'), ('GPIO14', 'R2'), ('GPIO12', 'G2'), ('GPIO13', 'B2'),
          ('GPIO23', 'A'), ('GPIO19', 'B'), ('GPIO5', 'C'), ('GPIO17', 'D'), ('GPIO32', 'E'), ('GPIO16', 'CLK'),
          ('GPIO4', 'LAT'), ('GPIO15', 'OE'), ('GND', 'GND')]
 lpin = {}
 for i, (p, _) in enumerate(LEFT):
-    y = ey0 + 80 + i * 82
+    y = ey0 + 80 + i * 105
     d.rectangle((ex0 - 12, y - 6, ex0, y + 6), fill=INK)
     text(ex0 + 12, y, p, F, INK, 'lm')
     lpin[i] = (ex0 - 12, y)
@@ -91,7 +90,7 @@ for i, sig in enumerate(order):
 
 # ---------------------------------------------------------------- panels and chaining
 py0 = 860
-text(1430, py0 - 40, 'Dalles (bouton dalle GPIO34)', FB)
+text(1430, py0 - 40, 'Dalles (choix par le menu serie)', FB)
 d.rounded_rectangle((1430, py0, 1640, py0 + 120), 8, outline=INK, width=3, fill=(20, 20, 30))
 d.rounded_rectangle((1690, py0, 1900, py0 + 120), 8, outline=INK, width=3, fill=(20, 20, 30))
 text(1535, py0 + 45, 'Dalle 1', FB, (240, 240, 240), 'mm')
@@ -153,35 +152,8 @@ for ch, (label, pin_i, y) in enumerate((('G', 2, ay0 + 220), ('D', 3, ay0 + 520)
 text(ax0 + 20, ay0 + 640, 'Point milieu ~1,3 V. Sortie haut-parleur : ajouter un pont diviseur.', FS, RED)
 text(ax0 + 20, ay0 + 665, 'Masse du jack reliee a la masse de l\'ESP32.', FS, GREY)
 
-# ---------------------------------------------------------------- button
-def button(i, label, col=INK):
-    bx, by = lpin[i]
-    wire([(bx, by), (735, by), (735, by + 20)], col)
-    d.line((720, by + 20, 750, by + 20), fill=col, width=3)
-    d.line((720, by + 20, 742, by + 40), fill=col, width=3)
-    wire([(735, by + 44), (735, by + 58)], INK)
-    d.line((718, by + 58, 752, by + 58), fill=INK, width=4)
-    text(ex0 + 12, by + 26, label, FS, col, 'lm')
-
-
-button(4, 'bouton mode')
-# bouton dalle : actif a l'etat haut (vers 3,3 V) + 10 k vers la masse, comme le reset wifi de l'horloge
-bx, by = lpin[5]
-wire([(bx, by), (735, by), (735, by + 20)], BLUE)
-dot(735, by, BLUE)
-d.line((720, by + 20, 750, by + 20), fill=BLUE, width=3)
-d.line((720, by + 20, 742, by + 40), fill=BLUE, width=3)
-wire([(735, by + 44), (735, by + 54)], RED)
-text(735, by + 56, '3,3 V', FS, RED, 'mt')
-wire([(735, by), (725, by)], INK)
-d.rectangle((700, by - 7, 725, by + 7), outline=GREEN, width=3)
-text(712, by - 10, '10 k', FS, GREEN, 'mb')
-wire([(700, by), (692, by), (692, by + 20)], INK)
-d.line((684, by + 20, 700, by + 20), fill=INK, width=4)
-text(ex0 + 12, by + 26, 'bouton dalle', FS, BLUE, 'lm')
-
 # ---------------------------------------------------------------- demo jumper (GPIO18 -> GND)
-jx, jy = lpin[6]
+jx, jy = lpin[4]
 wire([(jx, jy), (735, jy), (735, jy + 14)], ORANGE)
 for yy in (jy + 20, jy + 40):  # two header pins
     d.rectangle((729, yy - 6, 741, yy + 6), fill=INK)
@@ -198,20 +170,20 @@ text(px0 + 30, py0p + 110, '+5 V  ->  broche 5 V / VIN de l\'ESP32', F, RED)
 text(px0 + 30, py0p + 150, 'GND   ->  dalles + ESP32 (masse commune)', F, INK)
 text(px0 + 30, py0p + 200, 'Fils de 1,5 mm2 pour le 5 V des dalles.', FS, GREY)
 text(px0 + 30, py0p + 230, 'Ne pas alimenter les dalles par l\'USB de l\'ESP32.', FS, RED)
-vx, vy = lpin[7]
+vx, vy = lpin[5]
 wire([(px0 + 640, py0p + 110), (720, py0p + 110), (720, vy), (vx, vy)], RED, 4)
-gx, gy = lpin[8]
+gx, gy = lpin[6]
 wire([(px0 + 640, py0p + 150), (700, py0p + 150), (700, gy), (gx, gy)], INK, 4)
 
-# ---------------------------------------------------------------- button use
+# ---------------------------------------------------------------- serial menu and demo
 ux0, uy0 = 760, 960
-box(ux0, uy0, ux0 + 620, uy0 + 380, 'Boutons et cavalier demo', (245, 245, 255))
-for i, s in enumerate(['Bouton GPIO33 / BOOT :', 'Appui court : mode suivant', 'Appui 1 a 5 s : luminosite (5 niveaux)',
-                       'Appui 5 s : type de dalle suivant (secours)',
+box(ux0, uy0, ux0 + 620, uy0 + 380, 'Reglages : moniteur serie 115200 bauds', (245, 245, 255))
+for i, s in enumerate(['Menu au demarrage, ou touche ? puis Entree :', '1 a 4 : type de dalle (memorise, redemarre)',
+                       'd : demo marche / arret (memorise)', "m : mode d'affichage suivant",
+                       'l : luminosite suivante',
                        'Modes : Auto, Barres, Spectre, Miroir,', 'Aiguilles, Stereo, Onde',
-                       'Bouton dalle GPIO34 (vers 3,3 V, 10 k vers GND) :', 'dalle suivante a chaque appui, appliquee 2 s apres',
-                       'Cavalier GPIO18 - GND : demo (musique interne)']):
-    text(ux0 + 30, uy0 + 56 + i * 34, s, FB if i == 0 else F, BLUE if i in (6, 7) else ORANGE if i == 8 else INK)
+                       'Cavalier GPIO18 - GND : demo forcee', '(musique interne, sans source audio)']):
+    text(ux0 + 30, uy0 + 60 + i * 34, s, FB if i == 0 else F, ORANGE if i >= 7 else INK)
 
 img.save(OUT)
 print(OUT)

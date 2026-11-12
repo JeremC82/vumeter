@@ -9,9 +9,31 @@ VU-mètre stéréo autonome (sans wifi) sur ESP32 et panneau(x) LED HUB75.
 - Entrée ligne analogique : GPIO36 (L) / GPIO39 (R), polarisée ~1,3 V, lue par l'ADC interne via I2S0.
 - Panneau sur I2S1 (mêmes broches que l'horloge ClockV1).
 - Dispositions : 64x64, 2x64x64, 128x64, 2x128x64.
-- Bouton mode GPIO33/BOOT : appui court = mode d'affichage, 1-5 s = luminosité, 5 s = disposition du panneau (secours).
-- Bouton dalle GPIO34 (même broche que le bouton reset wifi de l'horloge ClockV1 : bouton vers le 3,3 V + résistance 10 k vers la masse) : chaque appui passe à la disposition suivante (64x64 → 2x64x64 → 128x64 → 2x128x64), appliquée 2 s après le dernier appui (redémarrage, choix mémorisé).
-- Mode démo : cavalier permanent entre GPIO18 et la masse → musique synthétisée en interne (batterie, basse, arpège stéréo), sans source audio. Se met ou s'enlève à chaud.
+- Mode démo : cavalier permanent entre GPIO18 et la masse, ou touche `d` du menu série → musique synthétisée en interne (batterie, basse, arpège stéréo), sans source audio. Se met ou s'enlève à chaud.
+
+## Menu du moniteur série
+
+Moniteur série à **115200 bauds** : le menu s'affiche au démarrage, puis avec `?`. Taper la touche puis Entrée.
+
+```
+===== VU-metre v1.34 =====
+Dalle : 128x64   Mode : Auto   Luminosite : 3/5
+Demo  : arretee
+-------------------------------
+  1 : dalle 64x64
+  2 : dalle 2x64x64
+  3 : dalle 128x64  <- actuelle
+  4 : dalle 2x128x64
+  d : demo marche / arret
+  m : mode d'affichage suivant
+  l : luminosite suivante
+  ? : afficher ce menu
+```
+
+- `1` à `4` : choix de la dalle, enregistré, l'ESP32 redémarre.
+- `d` : lance ou arrête la démo, choix mémorisé après redémarrage (le cavalier GPIO18 force la démo quel que soit ce réglage).
+
+Détails, outils pour se connecter et exemples : [docs/menu-serie.md](docs/menu-serie.md).
 
 Câblage : [docs/branchement.png](docs/branchement.png) (généré par `docs/branchement.py`).
 
@@ -19,13 +41,7 @@ Compilation : `./build.ps1` (arduino-cli, ESP32 classique) → `vumeter.bin`.
 
 > Pas encore testé sur le matériel.
 
-## Firmware (v1.33)
+## Firmware
 
-Binaires prêts à flasher (un seul binaire pour toutes les dalles, à l'adresse 0x10000) :
-
-| Fichier | Usage | MD5 |
-|---|---|---|
-| [firmware/vumeter_v1.33.bin](firmware/vumeter_v1.33.bin) | normal (démo par cavalier GPIO18) | `e5c9e6805ca78f75ff92b36ce527bfdc` |
-| [firmware/vumeter_v1.33_demo.bin](firmware/vumeter_v1.33_demo.bin) | démo toujours active, sans cavalier ni source audio | `6e7b064cd55ddca19bb53cd401cdf90e` |
-
-Versions précédentes dans `firmware/`. Compilation de la version démo : `./build.ps1 -Demo`.
+Binaire prêt à flasher (un seul binaire pour toutes les dalles, à l'adresse 0x10000) :
+[firmware/vumeter_v1.34.bin](firmware/vumeter_v1.34.bin) — MD5 `b45443206433520436cbc26405af9295`
