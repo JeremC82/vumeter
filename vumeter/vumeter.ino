@@ -16,7 +16,9 @@
 /*    appui 1 a 5 s      : luminosite suivante (5 niveaux)                                       */
 /*    appui 5 s          : configuration de dalle suivante (redemarre) - secours du bouton 2      */
 /*                                                                                                */
-/*  Bouton 2 "dalle" sur GPIO 21 (vers la masse) : chaque appui passe a la dalle suivante         */
+/*  Bouton 2 "dalle" sur GPIO 34 (meme broche que le bouton reset wifi de l'horloge) : vers le    */
+/*  3,3 V avec une resistance de 10 k vers la masse (GPIO 34 n'a pas de rappel interne).          */
+/*  Chaque appui passe a la dalle suivante                                                       */
 /*  (64x64 -> 2x64x64 -> 128x64 -> 2x128x64), le choix est garde et applique 2 s apres le dernier */
 /*  appui (redemarrage).                                                                         */
 /*                                                                                                */
@@ -52,7 +54,9 @@
 #define BTN_PIN 33   // bouton vers la masse (pull-up interne)
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
-#define LAYOUT_BTN_PIN 21  // bouton 2 vers la masse : type de dalle (pull-up interne)
+#define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
+#define VU_VERSION "1.33"
+// VU_DEMO_FORCE (option de compilation) : demo toujours active, sans cavalier
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -660,8 +664,10 @@ void handleLayoutButton() {
   static bool down = false;
   static uint32_t changedAt = 0, pressAt = 0;
   static int8_t pending = -1;
+  static bool armed = false;  // ignore le bouton tant qu'il n'a pas ete vu relache (broche en l'air ou bloquee)
   uint32_t now = millis();
-  bool pressed = digitalRead(LAYOUT_BTN_PIN) == LOW;
+  bool pressed = digitalRead(LAYOUT_BTN_PIN) == HIGH;
+  if (!armed) { armed = !pressed; return; }
   if (pressed && !down && now - pressAt > 60) {  // nouvel appui (anti-rebond)
     down = true;
     pressAt = now;
@@ -689,7 +695,11 @@ void handleDemoPin() {
   static uint8_t same = 0;
   if (millis() - last < 20) return;
   last = millis();
+#ifdef VU_DEMO_FORCE
+  bool want = true;
+#else
   bool want = digitalRead(DEMO_PIN) == LOW;
+#endif
   if (want == demoOn) { same = 0; return; }
   if (++same < 5) return;
   same = 0;
@@ -700,14 +710,19 @@ void handleDemoPin() {
 // ---------------------------------------------------------------- demarrage
 void setup() {
   Serial.begin(115200);
+  Serial.println("VU-metre v" VU_VERSION);
   WiFi.mode(WIFI_OFF);  // pas de wifi : toute la memoire pour la dalle
   btStop();
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(BOOT_PIN, INPUT_PULLUP);
   pinMode(DEMO_PIN, INPUT_PULLUP);
-  pinMode(LAYOUT_BTN_PIN, INPUT_PULLUP);
+  pinMode(LAYOUT_BTN_PIN, INPUT);  // pas de rappel interne sur GPIO 34
   delay(5);
+#ifdef VU_DEMO_FORCE
+  demoOn = true;
+#else
   demoOn = digitalRead(DEMO_PIN) == LOW;
+#endif
   prefs.begin("vu", false);
   layout = prefs.getUChar("layout", 0) % 4;
   mode = prefs.getUChar("mode", M_AUTO) % M_COUNT;

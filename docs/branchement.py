@@ -49,7 +49,7 @@ text(W // 2, 72, 'ESP32 DevKit (38 broches) - meme brochage dalle que l\'horloge
 ex0, ey0, ex1, ey1 = 760, 140, 1080, 900
 box(ex0, ey0, ex1, ey1, 'ESP32 DevKit', (236, 242, 250))
 LEFT = [('3V3', '3,3 V'), ('GND', 'masse'), ('GPIO36', 'audio G (VP)'), ('GPIO39', 'audio D (VN)'), ('GPIO33', 'bouton'),
-        ('GPIO21', 'bouton dalle'), ('GPIO18', 'demo'), ('5V / VIN', '5 V'), ('GND', 'masse')]
+        ('GPIO34', 'bouton dalle'), ('GPIO18', 'demo'), ('5V / VIN', '5 V'), ('GND', 'masse')]
 RIGHT = [('GPIO25', 'R1'), ('GPIO26', 'G1'), ('GPIO27', 'B1'), ('GPIO14', 'R2'), ('GPIO12', 'G2'), ('GPIO13', 'B2'),
          ('GPIO23', 'A'), ('GPIO19', 'B'), ('GPIO5', 'C'), ('GPIO17', 'D'), ('GPIO32', 'E'), ('GPIO16', 'CLK'),
          ('GPIO4', 'LAT'), ('GPIO15', 'OE'), ('GND', 'GND')]
@@ -91,7 +91,7 @@ for i, sig in enumerate(order):
 
 # ---------------------------------------------------------------- panels and chaining
 py0 = 860
-text(1430, py0 - 40, 'Dalles (bouton dalle GPIO21)', FB)
+text(1430, py0 - 40, 'Dalles (bouton dalle GPIO34)', FB)
 d.rounded_rectangle((1430, py0, 1640, py0 + 120), 8, outline=INK, width=3, fill=(20, 20, 30))
 d.rounded_rectangle((1690, py0, 1900, py0 + 120), 8, outline=INK, width=3, fill=(20, 20, 30))
 text(1535, py0 + 45, 'Dalle 1', FB, (240, 240, 240), 'mm')
@@ -165,7 +165,20 @@ def button(i, label, col=INK):
 
 
 button(4, 'bouton mode')
-button(5, 'bouton dalle', BLUE)
+# bouton dalle : actif a l'etat haut (vers 3,3 V) + 10 k vers la masse, comme le reset wifi de l'horloge
+bx, by = lpin[5]
+wire([(bx, by), (735, by), (735, by + 20)], BLUE)
+dot(735, by, BLUE)
+d.line((720, by + 20, 750, by + 20), fill=BLUE, width=3)
+d.line((720, by + 20, 742, by + 40), fill=BLUE, width=3)
+wire([(735, by + 44), (735, by + 54)], RED)
+text(735, by + 56, '3,3 V', FS, RED, 'mt')
+wire([(735, by), (725, by)], INK)
+d.rectangle((700, by - 7, 725, by + 7), outline=GREEN, width=3)
+text(712, by - 10, '10 k', FS, GREEN, 'mb')
+wire([(700, by), (692, by), (692, by + 20)], INK)
+d.line((684, by + 20, 700, by + 20), fill=INK, width=4)
+text(ex0 + 12, by + 26, 'bouton dalle', FS, BLUE, 'lm')
 
 # ---------------------------------------------------------------- demo jumper (GPIO18 -> GND)
 jx, jy = lpin[6]
@@ -196,7 +209,7 @@ box(ux0, uy0, ux0 + 620, uy0 + 380, 'Boutons et cavalier demo', (245, 245, 255))
 for i, s in enumerate(['Bouton GPIO33 / BOOT :', 'Appui court : mode suivant', 'Appui 1 a 5 s : luminosite (5 niveaux)',
                        'Appui 5 s : type de dalle suivant (secours)',
                        'Modes : Auto, Barres, Spectre, Miroir,', 'Aiguilles, Stereo, Onde',
-                       'Bouton dalle GPIO21 : dalle suivante a chaque appui,', 'applique 2 s apres le dernier appui',
+                       'Bouton dalle GPIO34 (vers 3,3 V, 10 k vers GND) :', 'dalle suivante a chaque appui, appliquee 2 s apres',
                        'Cavalier GPIO18 - GND : demo (musique interne)']):
     text(ux0 + 30, uy0 + 56 + i * 34, s, FB if i == 0 else F, BLUE if i in (6, 7) else ORANGE if i == 8 else INK)
 
