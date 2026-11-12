@@ -12,3 +12,9 @@ Câblage : [docs/branchement.png](docs/branchement.png) (généré par `docs/bra
 Compilation : `./build.ps1` (arduino-cli, ESP32 classique) → `vumeter.bin`.
 
 > Pas encore testé sur le matériel.
+
+## Firmware
+
+Binaire prêt à flasher : [firmware/vumeter_v1.0.bin](firmware/vumeter_v1.0.bin)
+(un seul binaire pour toutes les dalles, à flasher à l'adresse 0x10000).
+MD5 : `ccbeebabff89390d199d4b956e75e7bd`
