@@ -116,7 +116,8 @@ def vupos(db):
 
 def mode_aiguilles():
     im = Image.new('RGB', (W, H))
-    dw, dh = W // 2, H
+    side = W >= 128 and H <= 64
+    dw, dh = (W // 2, H) if side else (W, H // 2)
     for c, needle in enumerate((0.72, 0.55)):
         cv = Image.new("RGB", (dw, dh), (20, 70, 200)); d = ImageDraw.Draw(cv)
         ink, red = (10, 6, 0), (200, 20, 10)
@@ -139,52 +140,89 @@ def mode_aiguilles():
         text(cv, 2, dh - 9, 'R' if c else 'L', ink)
         a = a0 + (a1 - a0) * needle
         d.line((px, py, px + math.sin(a) * (r - 1), py - math.cos(a) * (r - 1)), fill=ink)  # aiguille fine
-        im.paste(cv, (c * dw, 0))
+        im.paste(cv, (c * dw, 0) if side else (0, c * dh))
+    return im
+
+
+PAL = dict(w=(255, 255, 255), r=(255, 40, 40), y=(255, 220, 0), b=(40, 90, 255), c=(0, 220, 255),
+           g=(40, 230, 80), p=(255, 60, 200), o=(255, 140, 0), v=(150, 60, 255))
+SPR_E = [[["..ppppp..", ".pwpppwp.", "ppppppppp", "p.c.c.c.p", "..c.c.c..", ".c..c..c.", "c...c...c"],
+          ["..ppppp..", ".pwpppwp.", "ppppppppp", "p.c.c.c.p", ".c..c..c.", "..c.c.c..", "...c.c..."]],
+         [["v...o...v", ".v.ooo.v.", "..oowoo..", "vvooooovv", "v.ooooo.v", "..o.o.o..", ".o.....o."],
+          [".v..o..v.", "..vooov..", "..oowoo..", ".vooooov.", "v.ooooo.v", ".o..o..o.", "o.......o"]],
+         [["c.......c", ".c.ggg.c.", "..gwywg..", "cgyyyyygc", "c.ggggg.c", "..g.y.g..", "...g.g..."],
+          ["cc.....cc", "..cgggc..", "..gwywg..", ".gyyyyyg.", "..ggggg..", "..g.y.g..", "...g.g..."]]]
+SPR_SHIP = ["....c....", "...ccc...", "...cwc...", "..bcwcb..", ".bbcccbb.", "bbcbcbcbb", "b.o...o.b", "..o...o.."]
+SPR_LIFE = ["..c..", ".ccc.", "bcwcb", "b...b"]
+
+
+def game_frame(gw, gh):
+    """Une image du mode Jeu de vumeter.ino (sprites originaux, ecran d'arcade)."""
+    im = Image.new('RGB', (gw, gh))
+    rnd = random.Random(3)
+
+    def sprite(rows, x, y, swap=None):
+        for r, line in enumerate(rows):
+            for c, ch in enumerate(line):
+                if ch == '.':
+                    continue
+                if swap and ch == swap[0]:
+                    ch = swap[1]
+                if 0 <= x + c < gw and 0 <= y + r < gh:
+                    im.putpixel((x + c, y + r), PAL[ch])
+
+    for _ in range(gw * gh // 220):  # etoiles de couleur
+        col = PAL[rnd.choice('wrybcgpov')]
+        k = rnd.uniform(.15, .45)
+        im.putpixel((rnd.randrange(gw), rnd.randrange(12, gh)), tuple(int(v * k) for v in col))
+    tall = gh >= 128
+    types = [0, 1, 1, 2, 2] if tall else [0, 1, 2]
+    cols = max(4, min(11, (gw - 6) // 11))
+    x0 = (gw - cols * 11) // 2 + 1 + 2
+    dead = {(1, 3), (2, 6), (3, 1), (4, 5), (4, 9), (2, 0)}
+    for r, t in enumerate(types):
+        for c in range(cols):
+            if (t == 0 and c % 2) or (r, c) in dead:
+                continue
+            sprite(SPR_E[t][(c + r) % 2], x0 + c * 11, 13 + r * 9, ('p', 'o') if (t == 0 and c == 4) else None)
+    py = gh - 15 if tall else gh - 8
+    if tall:  # ennemis en pique
+        sprite(SPR_E[1][1], 30, 70)
+        sprite(SPR_E[2][0], 88, 84)
+    sprite(SPR_SHIP, 58, py)
+    for k, y in enumerate((py - 14, py - 13, py - 12)):  # tir du vaisseau
+        im.putpixel((62, y), (PAL['w'], PAL['y'], PAL['o'])[k])
+    for bx, by in ((92, py - 30), (33, py - 20)):  # tirs ennemis
+        for k in range(3):
+            im.putpixel((bx, by + k), PAL['r'] if k < 2 else PAL['w'])
+    for dx, dy in ((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)):  # explosion
+        im.putpixel((50 + dx * 3, 40 + dy * 3), PAL['y'])
+    tiny(im, 1, 0, 'SCORE', PAL['r']); tiny(im, 1, 6, '12450', (230, 230, 230))
+    rx = gw // 2 - 11 if gw >= 96 else gw - 24
+    tiny(im, rx, 0, 'RECORD', PAL['r']); tiny(im, rx, 6, '30800', (230, 230, 230))
+    if tall:
+        for i in range(2):
+            sprite(SPR_LIFE, 1 + i * 7, gh - 5)
+        for i in range(3):
+            x = gw - 4 - i * 4
+            for (xx, yy, ch) in ((x, gh - 5, 'y'), (x + 1, gh - 5, 'y'), (x, gh - 4, 'r'), (x + 1, gh - 4, 'r'),
+                                 (x, gh - 3, 'r'), (x + 1, gh - 3, 'r'), (x, gh - 2, 'b')):
+                im.putpixel((xx, yy), PAL[ch])
+    else:
+        for i in range(2):
+            sprite(SPR_LIFE, gw - 6 - i * 7, 1)
     return im
 
 
 def mode_jeu():
-    """Mode Jeu : shoot'em up automatique (sprites de vumeter.ino)."""
-    im = Image.new('RGB', (W, H)); d = ImageDraw.Draw(im)
-    ship = [0b0001000, 0b0011100, 0b0111110, 0b1111111, 0b1001001]
-    en = [[0b0100010, 0b0011100, 0b0110110, 0b1111111, 0b1010101],
-          [0b1000001, 0b0111110, 0b1101011, 0b0111110, 0b0100010]]
-
-    def sprite(rows, x, y, col):
-        for r, bits in enumerate(rows):
-            for c in range(7):
-                if bits & (0x40 >> c) and 0 <= x + c < W and 0 <= y + r < H:
-                    im.putpixel((x + c, y + r), col)
-
-    for _ in range(W // 4):  # etoiles
-        v = random.randint(50, 150)
-        im.putpixel((random.randrange(W), random.randrange(8, H)), (v, v, v))
-    cols = max(4, min(12, (W - 14) // 10))
-    x0 = (W - cols * 10) // 2 + 1 + 3
-    dead = {(0, 2), (1, 5), (2, 0), (2, 7), (1, 8)}
-    for r, hue in enumerate((300, 35, 140)):
-        for c in range(cols):
-            if (r, c) in dead or (r, c) == (2, 4):
-                continue
-            sprite(en[(c + r) % 2], x0 + c * 10, 9 + r * 7, hsv(hue, 1, 0.9))
-    sprite(en[1], 58, 38, hsv(140, 1, 0.9))  # ennemi en pique
-    sprite(ship, 61, 57, (0, 200, 255))
-    for y in (44, 45, 46):  # tir du vaisseau
-        im.putpixel((64, y), (255, 230, 0) if y < 46 else (160, 120, 0))
-    for y in (30, 31):  # tir ennemi
-        im.putpixel((90, y), (255, 40, 30))
-    for k, (dx, dy) in enumerate(((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1))):
-        im.putpixel((25 + dx * 2, 18 + dy * 2), (255, 140, 0))  # explosion
-    d.text((1, -1), '1250', fill=(200, 200, 200), font=TINY)
-    for i in range(3):
-        d.rectangle((W - 4 - i * 5, 2, W - 2 - i * 5, 4), fill=(0, 200, 255))
-    return im
+    return game_frame(W, H)
 
 
 TF = {str(i): g for i, g in enumerate(([7, 5, 5, 5, 7], [2, 6, 2, 2, 7], [7, 1, 7, 4, 7], [7, 1, 7, 1, 7], [5, 5, 7, 1, 1],
                                         [7, 4, 7, 1, 7], [7, 4, 7, 5, 7], [7, 1, 1, 1, 1], [7, 5, 7, 5, 7], [7, 5, 7, 1, 7]))}
 TF.update({'L': [4, 4, 4, 4, 7], 'R': [6, 5, 6, 5, 5], 'P': [6, 5, 6, 4, 4], 'E': [7, 4, 6, 4, 7], 'A': [2, 5, 7, 5, 5],
-           'K': [5, 5, 6, 5, 5], 'm': [0, 6, 7, 5, 5], '.': [0, 0, 0, 0, 2]})
+           'K': [5, 5, 6, 5, 5], 'm': [0, 6, 7, 5, 5], '.': [0, 0, 0, 0, 2],
+           'S': [7, 4, 7, 1, 7], 'C': [7, 4, 4, 4, 7], 'O': [7, 5, 5, 5, 7], 'D': [6, 5, 5, 5, 6]})
 
 
 def tiny(im, x, y, txt, col):
@@ -212,7 +250,8 @@ def scale_pos(dbs, pos, v):
 def mode_amp(style):
     """Modes Puissance (style 0) et Watts (style 1) de vumeter.ino."""
     A0, A1 = -0.8, 0.8
-    aw, ah = W // 2, H
+    side = W >= 128 and H <= 64
+    aw, ah = (W // 2, H) if side else (W, H // 2)
     im = Image.new('RGB', (W, H))
     for c, needle in enumerate((0.62, 0.48)):
         cv = Image.new('RGB', (aw, ah)); d = ImageDraw.Draw(cv)
@@ -256,20 +295,22 @@ def mode_amp(style):
                     if 0 <= x < aw and 0 <= y < ah:
                         cv.putpixel((int(x), int(y)), navy)
             for i, (txt, q) in enumerate(zip(('5.0m', '50m', '100', '150', '200', '250'), (.05, .22, .40, .53, .67, .84))):
-                if i in (1, 2, 4):
+                if aw >= 100 or i in (1, 2, 4):
                     label(q, r + 5, txt, navy)
             for i in range(1, 7):
-                if i % 2 == 0:
+                if aw >= 100 or i % 2 == 0:
                     label(WAT_POS[i], r - 9, str(abs(WAT_DB[i])), navy)
             ncol, lcol = navy, navy
         tiny(cv, aw - 5 if c else 2, ah - 6, 'R' if c else 'L', lcol)
         d.line((px, py, *pt(needle, r + 3)), fill=ncol)
-        im.paste(cv, (c * aw, 0))
+        im.paste(cv, (c * aw, 0) if side else (0, c * ah))
     if style == 0:
-        tiny(im, W // 2 - 7, H - 18, 'PEAK', (200, 205, 230))
         d = ImageDraw.Draw(im)
-        d.ellipse((W // 2 - 3, H - 11, W // 2 + 3, H - 5), outline=(40, 80, 220))
-        d.ellipse((W // 2 - 2, H - 10, W // 2 + 2, H - 6), fill=(230, 240, 255))
+        lx, ly = (W // 2, H - 8) if side else (W - 6, H // 2)
+        if side:
+            tiny(im, W // 2 - 7, H - 18, 'PEAK', (200, 205, 230))
+        d.ellipse((lx - 3, ly - 3, lx + 3, ly + 3), outline=(40, 80, 220))
+        d.ellipse((lx - 2, ly - 2, lx + 2, ly + 2), fill=(230, 240, 255))
     return im
 
 
@@ -299,20 +340,45 @@ def font(size, bold=False):
 
 
 TINY = font(9)
-MODES = [('Spectre', bars()), ('Spectre St (cretes : rouge = gauche, blanc = droite, jaune = les deux)', bars(dual=True)),
-         ('Miroir', bars(center=True)), ('Stereo', bars(stereo=True)),
-         ('Aiguilles', mode_aiguilles()), ('Jeu (dans la demo, joue tout seul)', mode_jeu()),
-         ('Puissance (voyant PEAK au centre)', mode_amp(0)), ('Watts', mode_amp(1))]
-pw, ph = W * P + 16, H * P + 16
-M, CAP, TOP = 40, 50, 110
-img = Image.new('RGB', (2 * pw + 3 * M, TOP + 4 * (ph + CAP + M)), (18, 18, 22))
-d = ImageDraw.Draw(img)
-d.text((img.width // 2, 40), 'VU-metre HUB75 - les 8 modes (dalle 128x64)', font=font(34, True), fill=(235, 235, 235), anchor='mm')
-d.text((img.width // 2, 80), 'Touche m du menu serie : mode suivant - Auto fait defiler les modes toutes les 20 s - LED eteintes en gris fonce',
-       font=font(18), fill=(150, 150, 150), anchor='mm')
-for i, (name, px) in enumerate(MODES):
-    x, y = M + (i % 2) * (pw + M), TOP + (i // 2) * (ph + CAP + M)
-    d.text((x, y + 18), name, font=font(22, True), fill=(220, 220, 220), anchor='lm')
-    img.paste(led_panel(px), (x, y + CAP - 8))
-img.save(OUT)
-print(OUT)
+
+
+def planche(w, h, pitch, out, title):
+    """Planche des 8 modes pour une taille d'ecran (les fonctions de dessin lisent W et H)."""
+    global W, H, P
+    W, H, P = w, h, pitch
+    modes = [('Spectre', bars()), ('Spectre St (cretes : G rouge, D blanc, jaune si egales)', bars(dual=True)),
+             ('Miroir', bars(center=True)), ('Stereo', bars(stereo=True)),
+             ('Aiguilles', mode_aiguilles()), ('Jeu (dans la demo, joue tout seul)', mode_jeu()),
+             ('Puissance (voyant PEAK)', mode_amp(0)), ('Watts', mode_amp(1))]
+    ncol = 1 if w >= 256 else 2
+    pw, ph = W * P + 16, H * P + 16
+    M, CAP, TOP = 40, 50, 110
+    nrow = (len(modes) + ncol - 1) // ncol
+    img = Image.new('RGB', (ncol * pw + (ncol + 1) * M, TOP + nrow * (ph + CAP + M)), (18, 18, 22))
+    d = ImageDraw.Draw(img)
+    d.text((img.width // 2, 40), title, font=font(34, True), fill=(235, 235, 235), anchor='mm')
+    d.text((img.width // 2, 80), 'Touche m du menu serie : mode suivant - Auto fait defiler les modes toutes les 20 s - LED eteintes en gris fonce',
+           font=font(18), fill=(150, 150, 150), anchor='mm')
+    for k, (name, px) in enumerate(modes):
+        x, y = M + (k % ncol) * (pw + M), TOP + (k // ncol) * (ph + CAP + M)
+        d.text((x, y + 18), name, font=font(22, True), fill=(220, 220, 220), anchor='lm')
+        panel = led_panel(px)
+        if h >= 128:  # jonction des 2 dalles empilees
+            ImageDraw.Draw(panel).line((8, 8 + 64 * P, 8 + W * P, 8 + 64 * P), fill=(60, 60, 70), width=2)
+        img.paste(panel, (x, y + CAP - 8))
+    img.save(out)
+    print(out)
+
+
+DOC = os.path.dirname(OUT)
+planche(128, 64, 6, OUT, 'VU-metre HUB75 - les 8 modes (dalle 128x64)')
+planche(128, 128, 5, os.path.join(DOC, 'rendu-128x128.png'), 'VU-metre HUB75 - les 8 modes (128x128 : 2 dalles 128x64 empilees)')
+planche(256, 64, 5, os.path.join(DOC, 'rendu-256x64.png'), 'VU-metre HUB75 - les 8 modes (256x64 : 2 dalles 128x64 cote a cote)')
+
+# jeu seul sur 2 dalles 128x64 empilees (128x128), en grand
+W, H, P = 128, 128, 6
+pan = led_panel(game_frame(W, H))
+ImageDraw.Draw(pan).line((8, 8 + 64 * P, 8 + W * P, 8 + 64 * P), fill=(60, 60, 70), width=2)
+OUT2 = os.path.join(DOC, 'rendu-jeu.png')
+pan.save(OUT2)
+print(OUT2)

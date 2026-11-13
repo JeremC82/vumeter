@@ -58,7 +58,7 @@
 #define BOOT_PIN 0   // bouton BOOT de la carte, meme role
 #define DEMO_PIN 18  // cavalier vers la masse = mode demo (pull-up interne)
 #define LAYOUT_BTN_PIN 34  // bouton 2 vers le 3,3 V + 10 k vers la masse (comme le reset wifi de l'horloge)
-#define VU_VERSION "1.38"
+#define VU_VERSION "1.39"
 // entrees audio : ADC1 canal 0 = GPIO 36 (gauche), canal 3 = GPIO 39 (droite)
 #define ADC_CH_L ADC1_CHANNEL_0
 #define ADC_CH_R ADC1_CHANNEL_3
@@ -555,12 +555,14 @@ float ampPos(float db) { return ampStyle ? scalePos(WAT_DB, WAT_POS, 8, db) : sc
 const uint8_t TF_DIG[10][5] = { { 7, 5, 5, 5, 7 }, { 2, 6, 2, 2, 7 }, { 7, 1, 7, 4, 7 }, { 7, 1, 7, 1, 7 }, { 5, 5, 7, 1, 1 },
                                 { 7, 4, 7, 1, 7 }, { 7, 4, 7, 5, 7 }, { 7, 1, 1, 1, 1 }, { 7, 5, 7, 5, 7 }, { 7, 5, 7, 1, 7 } };
 const uint8_t TF_L[5] = { 4, 4, 4, 4, 7 }, TF_R[5] = { 6, 5, 6, 5, 5 }, TF_P[5] = { 6, 5, 6, 4, 4 }, TF_E[5] = { 7, 4, 6, 4, 7 },
-              TF_A[5] = { 2, 5, 7, 5, 5 }, TF_K[5] = { 5, 5, 6, 5, 5 }, TF_M[5] = { 0, 6, 7, 5, 5 }, TF_DOT[5] = { 0, 0, 0, 0, 2 };
+              TF_A[5] = { 2, 5, 7, 5, 5 }, TF_K[5] = { 5, 5, 6, 5, 5 }, TF_M[5] = { 0, 6, 7, 5, 5 }, TF_DOT[5] = { 0, 0, 0, 0, 2 },
+              TF_S[5] = { 7, 4, 7, 1, 7 }, TF_C[5] = { 7, 4, 4, 4, 7 }, TF_D[5] = { 6, 5, 5, 5, 6 };
 const uint8_t *tfGlyph(char c) {
   if (c >= '0' && c <= '9') return TF_DIG[c - '0'];
   switch (c) {
     case 'L': return TF_L; case 'R': return TF_R; case 'P': return TF_P; case 'E': return TF_E;
     case 'A': return TF_A; case 'K': return TF_K; case 'm': return TF_M; case '.': return TF_DOT;
+    case 'S': return TF_S; case 'C': return TF_C; case 'O': return TF_DIG[0]; case 'D': return TF_D;
   }
   return nullptr;
 }
@@ -698,38 +700,56 @@ void ampUpdate() {
   }
 }
 
-// ---------------------------------------------------------------- mode Jeu : petit shoot'em up qui joue tout seul
-// Vaisseau en bas pilote automatiquement, formation d'ennemis qui oscille, ennemis qui piquent.
+// ---------------------------------------------------------------- mode Jeu : shoot'em up d'arcade qui joue tout seul
+// Sprites originaux multicolores (9x7), formation qui oscille, ennemis qui piquent en courbe,
+// ecran d'arcade : SCORE et RECORD en haut, vies et vague en bas (128x128).
 // Reagit a la musique : ennemis plus lumineux sur les basses, etoiles plus rapides quand le son monte.
 // Dessin sans scintillement : seuls les rectangles dessines a l'image precedente sont effaces.
 #define G_MAXE 60
 #define G_SHOTS 3
-#define G_BOMBS 8
-#define G_BOOMS 8
-#define G_STARS 48
-#define G_RECTS 160
-int gPY = 57;   // ligne du haut du vaisseau (H - 7)
-int gRows = 3;  // 5 rangees sur 128x128
+#define G_BOMBS 10
+#define G_BOOMS 10
+#define G_STARS 64
+#define G_RECTS 260
 #define G_MAXROWS 5
-struct GEnemy { float x, y, vx, vy; int8_t row, col; uint8_t state; bool alive; };  // state : 0 rang, 1 pique, 2 retour
+const int GW = 9, GH = 7;  // taille des ennemis
+struct GEnemy { float x, y, vx, vy; int16_t t; int8_t row, col, type, hp, dir; uint8_t state; bool alive; };  // state : 0 rang, 1 pique, 2 retour
 struct GDot { float x, y; bool on; };
 struct GBoom { int16_t x, y; uint8_t t; };
-struct GStar { int16_t x; float y, v; };
+struct GStar { int16_t x; float y, v; uint8_t hue; };
 struct GRect { int16_t x, y; uint8_t w, h; };
 GEnemy gEn[G_MAXE];
 GDot gShot[G_SHOTS], gBomb[G_BOMBS];
 GBoom gBoom[G_BOOMS];
 GStar gStar[G_STARS];
 GRect gOld[G_RECTS];
-int gNE = 0, gCols = 4, gNStar = 0, gNOld = 0, gLives = 0, gWave = 0, gDead = 0, gCool = 0;
-uint32_t gFrame = 0, gScore = 0, gLastStep = 0;
+int gNE = 0, gCols = 4, gRows = 3, gTop = 13, gPY = 49, gNStar = 0, gNOld = 0, gLives = 0, gWave = 0, gDead = 0, gCool = 0;
+uint32_t gFrame = 0, gScore = 0, gHi = 0, gLastStep = 0;
 float gPx = 0, gSway = 0;
-// sprites 7 pixels de large (bit 6 = colonne de gauche)
-const uint8_t SPR_SHIP[5] = { 0b0001000, 0b0011100, 0b0111110, 0b1111111, 0b1001001 };
-const uint8_t SPR_EN[2][5] = { { 0b0100010, 0b0011100, 0b0110110, 0b1111111, 0b1010101 },
-                               { 0b1000001, 0b0111110, 0b1101011, 0b0111110, 0b0100010 } };
-const float G_HUE[G_MAXROWS] = { 300, 35, 140, 190, 55 };  // magenta, orange, vert, cyan, jaune
+int8_t gRowType[G_MAXROWS];
 
+// sprites : '.' transparent, sinon une lettre de la palette ci-dessous
+// type 0 : meduse (2 tirs), type 1 : scarabee, type 2 : insecte ailé
+const char *const SPR_E[3][2][GH] = {
+  { { "..ppppp..", ".pwpppwp.", "ppppppppp", "p.c.c.c.p", "..c.c.c..", ".c..c..c.", "c...c...c" },
+    { "..ppppp..", ".pwpppwp.", "ppppppppp", "p.c.c.c.p", ".c..c..c.", "..c.c.c..", "...c.c..." } },
+  { { "v...o...v", ".v.ooo.v.", "..oowoo..", "vvooooovv", "v.ooooo.v", "..o.o.o..", ".o.....o." },
+    { ".v..o..v.", "..vooov..", "..oowoo..", ".vooooov.", "v.ooooo.v", ".o..o..o.", "o.......o" } },
+  { { "c.......c", ".c.ggg.c.", "..gwywg..", "cgyyyyygc", "c.ggggg.c", "..g.y.g..", "...g.g..." },
+    { "cc.....cc", "..cgggc..", "..gwywg..", ".gyyyyyg.", "..ggggg..", "..g.y.g..", "...g.g..." } }
+};
+const char *const SPR_SHIP[8] = { "....c....", "...ccc...", "...cwc...", "..bcwcb..", ".bbcccbb.", "bbcbcbcbb", "b.o...o.b", "..o...o.." };
+const char *const SPR_LIFE[4] = { "..c..", ".ccc.", "bcwcb", "b...b" };
+// palette : w blanc, r rouge, y jaune, b bleu, c cyan, g vert, p magenta, o orange, v violet
+const char G_PAL_CH[] = "wrybcgpov";
+const uint8_t G_PAL_RGB[9][3] = { { 255, 255, 255 }, { 255, 40, 40 }, { 255, 220, 0 }, { 40, 90, 255 }, { 0, 220, 255 },
+                                  { 40, 230, 80 }, { 255, 60, 200 }, { 255, 140, 0 }, { 150, 60, 255 } };
+uint16_t gPal[9];  // palette de l'image en cours (luminosite qui suit les basses)
+int gPalIdx(char ch) {
+  for (int i = 0; i < 9; i++)
+    if (G_PAL_CH[i] == ch) return i;
+  return -1;
+}
 void gMark(int x, int y, int w, int h) {
   if (gNOld < G_RECTS) gOld[gNOld++] = { (int16_t)x, (int16_t)y, (uint8_t)w, (uint8_t)h };
 }
@@ -737,37 +757,42 @@ void gPix(int x, int y, uint16_t c) {
   if (x >= 0 && x < W && y >= 0 && y < H) gfx->drawPixel(x, y, c);
   gMark(x, y, 1, 1);
 }
-void gSprite(const uint8_t *rows, int h, int x, int y, uint16_t col) {
+// dessine un sprite ; swapFrom -> swapTo permet de changer une couleur (meduse touchee)
+void gSprite(const char *const *rows, int w, int h, int x, int y, const uint16_t *pal, char swapFrom, char swapTo) {
   for (int r = 0; r < h; r++)
-    for (int c = 0; c < 7; c++)
-      if (rows[r] & (0x40 >> c)) {
-        int px = x + c, py = y + r;
-        if (px >= 0 && px < W && py >= 0 && py < H) gfx->drawPixel(px, py, col);
-      }
-  gMark(x, y, 7, h);
+    for (int c = 0; c < w; c++) {
+      char ch = rows[r][c];
+      if (ch == '.') continue;
+      if (ch == swapFrom) ch = swapTo;
+      int i = gPalIdx(ch), px = x + c, py = y + r;
+      if (i >= 0 && px >= 0 && px < W && py >= 0 && py < H) gfx->drawPixel(px, py, pal[i]);
+    }
+  gMark(x, y, w, h);
 }
-float gSlotX(int col) { return (W - gCols * 10) / 2 + 1 + col * 10 + gSway; }
-float gSlotY(int row) { return 9 + row * 7; }
+float gSlotX(int col) { return (W - gCols * 11) / 2 + 1 + col * 11 + gSway; }
+float gSlotY(int row) { return gTop + row * 9; }
 void gBoomAt(int x, int y) {
   for (int i = 0; i < G_BOOMS; i++)
     if (gBoom[i].t == 0) { gBoom[i] = { (int16_t)x, (int16_t)y, 1 }; return; }
 }
 void gNewWave() {
-  gCols = constrain((W - 14) / 10, 4, 12);
+  gCols = constrain((W - 6) / 11, 4, 11);
   gNE = 0;
   for (int r = 0; r < gRows; r++)
     for (int c = 0; c < gCols && gNE < G_MAXE; c++) {
+      if (gRowType[r] == 0 && (c & 1)) continue;  // meduses une place sur deux
       GEnemy &e = gEn[gNE++];
       e = {};
-      e.row = r; e.col = c; e.alive = true;
-      e.x = gSlotX(c); e.y = -8 - 6 * (gRows - r);  // arrivent du haut
+      e.row = r; e.col = c; e.type = gRowType[r]; e.alive = true;
+      e.hp = e.type == 0 ? 2 : 1;
+      e.x = gSlotX(c); e.y = -10 - 8 * (gRows - r);  // arrivent du haut
       e.state = 2;
     }
   gWave++;
 }
 void gReset() {
   gLives = 3; gScore = 0; gWave = 0; gDead = 0; gCool = 0;
-  gPx = W / 2 - 3;
+  gPx = W / 2 - 4;
   for (auto &s : gShot) s.on = false;
   for (auto &b : gBomb) b.on = false;
   for (auto &b : gBoom) b.t = 0;
@@ -776,120 +801,131 @@ void gReset() {
 void gameSetup() {
   gfx->fillScreen(0);
   gNOld = 0;
-  gPY = H - 7;
-  gRows = H >= 128 ? 5 : 3;
+  bool tall = H >= 128;
+  gRows = tall ? 5 : 3;
+  static const int8_t T5[5] = { 0, 1, 1, 2, 2 }, T3[3] = { 0, 1, 2 };
+  for (int r = 0; r < gRows; r++) gRowType[r] = tall ? T5[r] : T3[r];
+  gTop = 13;
+  gPY = tall ? H - 15 : H - 8;  // sur 128x128 : la ligne du bas montre vies et vague
+  gHi = prefs.getUInt("hiscore", 0);
   if (gLives <= 0 && gDead == 0) gReset();
-  gNStar = min(G_STARS, W / 4);
-  for (int i = 0; i < gNStar; i++) gStar[i] = { (int16_t)random(W), (float)random(8, H), 0.2f + random(100) / 120.0f };
+  gNStar = min(G_STARS, W * H / 220);
+  for (int i = 0; i < gNStar; i++) gStar[i] = { (int16_t)random(W), (float)random(12, H), 0.2f + random(100) / 120.0f, (uint8_t)random(9) };
   gLastStep = millis();
 }
 void gHitPlayer() {
-  gBoomAt(gPx + 3, gPY + 2);
+  gBoomAt(gPx + 4, gPY + 3);
   gLives--;
   gDead = gLives > 0 ? 50 : 120;  // pause avant le vaisseau suivant (plus longue apres GAME OVER)
+  if (gLives <= 0 && gScore > gHi) { gHi = gScore; prefs.putUInt("hiscore", gHi); }  // nouveau record
 }
 void gameStep() {
   gFrame++;
   float loud = view.rmsDb[0] < GATE_DB ? 0 : norm01(max(view.rmsDb[0], view.rmsDb[1]) + 6);
-  // etoiles
-  for (int i = 0; i < gNStar; i++) {
+  for (int i = 0; i < gNStar; i++) {  // etoiles
     GStar &s = gStar[i];
     s.y += s.v * (0.4f + 2.5f * loud);
-    if (s.y >= H) { s.y = 8; s.x = random(W); }
+    if (s.y >= H) { s.y = 12; s.x = random(W); }
   }
   // formation et piques
-  gSway = sinf(gFrame * 0.03f) * max(1, min(6, (W - gCols * 10) / 2 - 1));
+  gSway = sinf(gFrame * 0.03f) * max(1, min(6, (W - gCols * 11) / 2 - 1));
   int alive = 0;
   for (int i = 0; i < gNE; i++) alive += gEn[i].alive;
-  int diveEvery = max(18, 70 - gWave * 8);
+  int diveEvery = max(16, 60 - gWave * 7);
   if (gDead == 0 && gFrame % diveEvery == 0 && alive) {
     int k = random(gNE);
     for (int t = 0; t < gNE; t++, k = (k + 1) % gNE)
-      if (gEn[k].alive && gEn[k].state == 0) { gEn[k].state = 1; gEn[k].vx = 0; gEn[k].vy = 0.5f; break; }
+      if (gEn[k].alive && gEn[k].state == 0) {
+        GEnemy &e = gEn[k];
+        e.state = 1; e.vx = 0; e.vy = -0.6f; e.t = 0;
+        e.dir = e.x < W / 2 ? -1 : 1;  // part en boucle vers l'exterieur
+        break;
+      }
   }
+  float shipC = gPx + 4;
   for (int i = 0; i < gNE; i++) {
     GEnemy &e = gEn[i];
     if (!e.alive) continue;
     float sx = gSlotX(e.col), sy = gSlotY(e.row);
     if (e.state == 0) {
       e.x = sx; e.y = sy;
-    } else if (e.state == 1) {  // pique en visant le vaisseau
-      e.vx = constrain(e.vx + ((gPx + 3) - (e.x + 3)) * 0.004f, -1.3f, 1.3f);
-      e.vy = min(e.vy + 0.012f, 1.4f + 0.1f * gWave);
-      e.x += e.vx; e.y += e.vy;
-      if (e.y > H) { e.y = -6; e.state = 2; }
+    } else if (e.state == 1) {  // pique en courbe : boucle puis descente en visant le vaisseau
+      e.t++;
+      float curve = e.t < 50 ? e.dir * 1.2f * cosf(e.t * 0.063f) : 0;
+      e.vx = constrain(e.vx * 0.96f + curve * 0.06f + (shipC - (e.x + 4)) * (e.t < 50 ? 0.0005f : 0.004f), -1.4f, 1.4f);
+      e.vy = min(e.vy + 0.03f, 1.3f + 0.1f * gWave);
+      e.x += e.vx + curve; e.y += e.vy;
+      if (e.y > H) { e.y = -8; e.state = 2; }
     } else {  // retour a sa place
       float dx = sx - e.x, dy = sy - e.y;
       e.x += constrain(dx * 0.08f, -1.5f, 1.5f);
       e.y += constrain(dy * 0.08f, -1.5f, 1.5f);
       if (fabsf(dx) < 0.6f && fabsf(dy) < 0.6f) e.state = 0;
     }
-    // tirs ennemis
-    int chance = e.state == 1 ? 20 : 2 + gWave;
+    int chance = e.state == 1 ? 18 : 2 + gWave;  // tirs ennemis
     if (gDead == 0 && e.y > 0 && e.y < H * 0.6f && random(1000) < chance)
       for (auto &b : gBomb)
-        if (!b.on) { b = { e.x + 3, e.y + 5, true }; break; }
-    // collision avec le vaisseau
-    if (gDead == 0 && e.state == 1 && e.x + 6 >= gPx && e.x <= gPx + 6 && e.y + 4 >= gPY && e.y <= gPY + 4) {
-      e.alive = false;
-      gBoomAt(e.x + 3, e.y + 2);
+        if (!b.on) { b = { e.x + 4, e.y + GH, true }; break; }
+    if (gDead == 0 && e.state == 1 && e.x + GW - 1 >= gPx && e.x <= gPx + 8 && e.y + GH - 1 >= gPY && e.y <= gPY + 7) {
+      e.alive = false;  // collision avec le vaisseau
+      gBoomAt(e.x + 4, e.y + 3);
       gHitPlayer();
     }
   }
   // pilote automatique : esquive les tirs, sinon vise un ennemi en pique ou la colonne la plus proche
   if (gDead == 0) {
-    float target = gPx, cx = gPx + 3;
+    float target = gPx;
     bool dodge = false;
     for (auto &b : gBomb)
-      if (b.on && b.y > gPY - 22 && fabsf(b.x - cx) < 5) { target = b.x < cx ? gPx + 6 : gPx - 6; dodge = true; break; }
+      if (b.on && b.y > gPY - 24 && fabsf(b.x - shipC) < 6) { target = b.x < shipC ? gPx + 7 : gPx - 7; dodge = true; break; }
     if (!dodge) {
       float best = 1e9;
       for (int i = 0; i < gNE; i++) {
         GEnemy &e = gEn[i];
         if (!e.alive || e.y < 0) continue;
-        float d = fabsf(e.x - gPx) - (e.state == 1 ? 40 : 0);  // priorite aux ennemis en pique
+        float d = fabsf(e.x - gPx) - (e.state == 1 ? 40 : 0) - (e.type == 0 ? 8 : 0);  // priorite : piques, meduses
         if (d < best) { best = d; target = e.x; }
       }
     }
-    gPx += constrain(target - gPx, -1.2f, 1.2f);
-    gPx = constrain(gPx, 0.0f, (float)(W - 7));
-    // tir quand un ennemi est au-dessus
+    gPx += constrain(target - gPx, -1.3f, 1.3f);
+    gPx = constrain(gPx, 0.0f, (float)(W - GW));
     if (gCool > 0) gCool--;
-    if (gCool == 0)
+    if (gCool == 0)  // tir quand un ennemi est au-dessus
       for (int i = 0; i < gNE; i++)
         if (gEn[i].alive && gEn[i].y > 0 && fabsf(gEn[i].x - gPx) < 4) {
           for (auto &s : gShot)
-            if (!s.on) { s = { gPx + 3, (float)gPY - 3, true }; gCool = 7; break; }
+            if (!s.on) { s = { gPx + 4, (float)gPY - 3, true }; gCool = 7; break; }
           break;
         }
   } else if (--gDead == 0 && gLives <= 0) {
     gReset();  // fin de partie : on recommence
   }
-  // tirs du vaisseau
-  for (auto &s : gShot) {
+  for (auto &s : gShot) {  // tirs du vaisseau
     if (!s.on) continue;
     s.y -= 3;
     if (s.y < 0) { s.on = false; continue; }
     for (int i = 0; i < gNE; i++) {
       GEnemy &e = gEn[i];
-      if (e.alive && s.x >= e.x && s.x <= e.x + 6 && s.y <= e.y + 4 && s.y + 2 >= e.y) {
-        e.alive = false;
+      if (e.alive && s.x >= e.x && s.x <= e.x + GW - 1 && s.y <= e.y + GH - 1 && s.y + 2 >= e.y) {
         s.on = false;
-        gScore += e.state == 1 ? 150 : 50;
-        gBoomAt(e.x + 3, e.y + 2);
+        if (--e.hp > 0) break;  // meduse : il faut 2 tirs
+        e.alive = false;
+        static const uint16_t PTS[3][2] = { { 150, 400 }, { 80, 160 }, { 50, 100 } };
+        gScore += PTS[e.type][e.state == 1];
+        if (gScore > gHi) gHi = gScore;
+        gBoomAt(e.x + 4, e.y + 3);
         break;
       }
     }
   }
-  // tirs ennemis
-  for (auto &b : gBomb) {
+  for (auto &b : gBomb) {  // tirs ennemis
     if (!b.on) continue;
     b.y += 1.3f + 0.1f * gWave;
     if (b.y >= H) { b.on = false; continue; }
-    if (gDead == 0 && b.x >= gPx && b.x <= gPx + 6 && b.y + 1 >= gPY && b.y <= gPY + 4) { b.on = false; gHitPlayer(); }
+    if (gDead == 0 && b.x >= gPx && b.x <= gPx + 8 && b.y + 2 >= gPY + 2 && b.y <= gPY + 7) { b.on = false; gHitPlayer(); }
   }
   for (auto &b : gBoom)
-    if (b.t) b.t = b.t >= 9 ? 0 : b.t + 1;
+    if (b.t) b.t = b.t >= 12 ? 0 : b.t + 1;
   bool any = false;
   for (int i = 0; i < gNE; i++) any |= gEn[i].alive;
   if (!any) gNewWave();
@@ -901,48 +937,70 @@ void gameDraw() {
     if (x1 > x0 && y1 > y0) gfx->fillRect(x0, y0, x1 - x0, y1 - y0, 0);
   }
   gNOld = 0;
-  for (int i = 0; i < gNStar; i++) {
-    uint8_t v = 40 + gStar[i].v * 120;
-    gPix(gStar[i].x, (int)gStar[i].y, rgb(v, v, v));
-  }
   float bass = -120;
   for (int b = 0; b < 6; b++) bass = max(bass, max(view.bandDb[0][b], view.bandDb[1][b]));
-  float glow = norm01(bass + SPEC_BOOST);
+  float glow = 0.55f + 0.45f * norm01(bass + SPEC_BOOST);
+  uint16_t palFull[9];
+  for (int i = 0; i < 9; i++) {
+    gPal[i] = rgb(G_PAL_RGB[i][0] * glow, G_PAL_RGB[i][1] * glow, G_PAL_RGB[i][2] * glow);
+    palFull[i] = rgb(G_PAL_RGB[i][0], G_PAL_RGB[i][1], G_PAL_RGB[i][2]);
+  }
+  for (int i = 0; i < gNStar; i++) {  // etoiles de couleur qui scintillent
+    GStar &s = gStar[i];
+    if (((gFrame + i * 7) & 31) < 3) continue;
+    const uint8_t *c = G_PAL_RGB[s.hue];
+    float k = 0.15f + s.v * 0.3f;
+    gPix(s.x, (int)s.y, rgb(c[0] * k, c[1] * k, c[2] * k));
+  }
   for (int i = 0; i < gNE; i++) {
     GEnemy &e = gEn[i];
     if (!e.alive) continue;
-    int fr = e.state == 1 ? (gFrame / 4) & 1 : ((gFrame / 16) + e.col) & 1;  // battement d'ailes
-    gSprite(SPR_EN[fr], 5, (int)e.x, (int)e.y, hsv(G_HUE[e.row], 1, 0.45f + 0.55f * glow));
+    int fr = e.state == 1 ? (gFrame / 5) & 1 : ((gFrame / 16) + e.col) & 1;  // animation
+    gSprite(SPR_E[e.type][fr], GW, GH, (int)e.x, (int)e.y, gPal, 'p', e.hp == 1 && e.type == 0 ? 'o' : 'p');
   }
   for (auto &s : gShot)
-    if (s.on) { gPix(s.x, s.y, rgb(255, 230, 0)); gPix(s.x, s.y + 1, rgb(255, 230, 0)); gPix(s.x, s.y + 2, rgb(160, 120, 0)); }
+    if (s.on) { gPix(s.x, s.y, palFull[0]); gPix(s.x, s.y + 1, palFull[2]); gPix(s.x, s.y + 2, palFull[7]); }
   for (auto &b : gBomb)
-    if (b.on) { gPix(b.x, b.y, rgb(255, 40, 30)); gPix(b.x, b.y + 1, rgb(255, 40, 30)); }
+    if (b.on) { gPix(b.x, b.y, palFull[1]); gPix(b.x, b.y + 1, palFull[1]); gPix(b.x, b.y + 2, palFull[0]); }
   static const int8_t DX[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, DY[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
-  for (auto &b : gBoom) {
+  for (auto &b : gBoom) {  // explosions : anneau qui grandit, du blanc au rouge
     if (!b.t) continue;
-    uint16_t c = b.t < 4 ? rgb(255, 255, 160) : b.t < 7 ? rgb(255, 140, 0) : rgb(140, 30, 0);
+    uint16_t c = b.t < 4 ? palFull[0] : b.t < 7 ? palFull[2] : b.t < 10 ? palFull[7] : palFull[1];
     for (int k = 0; k < 8; k++) gPix(b.x + DX[k] * b.t / 2, b.y + DY[k] * b.t / 2, c);
+    if (b.t < 6) gPix(b.x, b.y, palFull[0]);
   }
-  if (gDead == 0) gSprite(SPR_SHIP, 5, (int)gPx, gPY, rgb(0, 200, 255));
-  // score et vies
-  gfx->setFont(NULL);
-  gfx->setTextSize(1);
-  gfx->setTextColor(rgb(200, 200, 200));
+  if (gDead == 0) gSprite(SPR_SHIP, 9, 8, (int)gPx, gPY, palFull, 0, 0);
+  // ecran d'arcade : SCORE a gauche, RECORD au centre
   char sc[12];
+  uint16_t red = rgb(255, 40, 40), white = rgb(230, 230, 230);
+  tinyText(*gfx, 1, 0, "SCORE", red);
   snprintf(sc, sizeof(sc), "%lu", (unsigned long)gScore);
-  gfx->setCursor(1, 0);
-  gfx->print(sc);
-  gMark(1, 0, strlen(sc) * 6, 8);
-  for (int i = 0; i < gLives; i++) {
-    gfx->fillRect(W - 4 - i * 5, 2, 3, 3, rgb(0, 200, 255));
-    gMark(W - 4 - i * 5, 2, 3, 3);
+  tinyText(*gfx, 1, 6, sc, white);
+  gMark(1, 6, tinyWidth(sc), 5);
+  int rx = W >= 96 ? W / 2 - 11 : W - 24;
+  tinyText(*gfx, rx, 0, "RECORD", red);
+  snprintf(sc, sizeof(sc), "%lu", (unsigned long)gHi);
+  tinyText(*gfx, rx, 6, sc, white);
+  gMark(rx, 6, tinyWidth(sc), 5);
+  if (H >= 128) {  // ligne du bas : vies a gauche, vague a droite
+    for (int i = 0; i < gLives - 1 && i < 6; i++) gSprite(SPR_LIFE, 5, 4, 1 + i * 7, H - 5, palFull, 0, 0);
+    for (int i = 0; i < gWave && i < 10; i++) {
+      int x = W - 4 - i * 4;
+      gPix(x, H - 5, palFull[2]); gPix(x + 1, H - 5, palFull[2]);
+      gPix(x, H - 4, palFull[1]); gPix(x + 1, H - 4, palFull[1]);
+      gPix(x, H - 3, palFull[1]); gPix(x + 1, H - 3, palFull[1]);
+      gPix(x, H - 2, palFull[3]);
+    }
+  } else if (W >= 96) {  // ecran bas : vies en haut a droite
+    for (int i = 0; i < gLives - 1 && i < 4; i++) gSprite(SPR_LIFE, 5, 4, W - 6 - i * 7, 1, palFull, 0, 0);
   }
   if (gLives <= 0 && gDead > 0) {
-    gfx->setTextColor(rgb(255, 60, 40));
-    gfx->setCursor(W / 2 - 27, 28);
+    gfx->setFont(NULL);
+    gfx->setTextSize(1);
+    gfx->setTextColor(red);
+    gfx->setCursor(W / 2 - 27, H / 2 - 4);
     gfx->print("GAME OVER");
-    gMark(W / 2 - 27, 28, 54, 8);
+    gMark(W / 2 - 27, H / 2 - 4, 54, 8);
   }
 }
 void gameUpdate() {
